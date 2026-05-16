@@ -1,0 +1,15 @@
+# Ambienti virtuali
+venv/
+env/
+
+# Cache di Python
+__pycache__/
+*.pyc
+*.pyo
+
+# File di sistema Mac
+.DS_Store
+
+# File di configurazione degli editor (opzionale ma consigliato)
+.vscode/
+.idea/

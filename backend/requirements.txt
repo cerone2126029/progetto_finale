@@ -1,0 +1,6 @@
+#lista librerie python usate nella parte backend
+fastapi
+uvicorn
+crawl4ai
+beautifulsoup4
+mistune

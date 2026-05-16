@@ -1,0 +1,6 @@
+#Lista di librerie python usate per la parte frontend
+fastapi
+uvicorn
+jinja2
+httpx
+python-multipart
