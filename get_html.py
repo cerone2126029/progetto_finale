@@ -42,6 +42,6 @@ def scarica_html_in_json(url: str):
         print(f"❌ Si è verificato un errore imprevisto: {e}")
 
 # Sostituisci questo link con l'URL che vuoi scaricare
-mio_url = "https://www.scaruffi.com/vol5/firehose.html"
+mio_url = "https://travel.state.gov/en/international-travel/travel-advisories/scams.html"
 
 scarica_html_in_json(mio_url)
