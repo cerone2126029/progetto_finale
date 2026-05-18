@@ -43,6 +43,6 @@ def scarica_html_in_json(url: str, nome_file_output: str = "html_output_spotify.
         print(f"❌ Si è verificato un errore imprevisto: {e}")
 
 # L'URL di Spotify tramite Google Cache fornito per il progetto
-mio_url = "https://open.spotify.com/show/0M67EPtP3aQM6nkBrFE9p3"
+mio_url = "https://open.spotify.com/episode/1JjRqVGuRkzkS9nexDxiLh"
 
 scarica_html_in_json(mio_url)
