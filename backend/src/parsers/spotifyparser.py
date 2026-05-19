@@ -1,3 +1,27 @@
+"""
+Parser specifico per il dominio open.spotify.com.
+
+
+Spotify è una SPA React: l'HTML statico è uno scheletro, il contenuto viene
+iniettato via JavaScript. Inoltre la pagina renderizzata contiene moltissimo
+rumore (footer con lista lingue, link legali, cookie banner, CTA di login,
+"Apri in app", link social) che NON appartiene al contenuto informativo
+della pagina visualizzata.
+
+
+Strategia di estrazione:
+  1. Crawl4AI con rendering JS e css_selector="main" per restringere l'estrazione
+     al solo contenitore principale (titolo + tracklist/episodi/descrizione).
+  2. excluded_tags e excluded_selector per togliere footer, nav, banner cookie e
+     pulsanti di autenticazione.
+  3. Post-processing line-based che scarta righe note come boilerplate
+     (lingue, link legali, social, brand, CTA) e tronca alla prima "ancora di
+     footer" residua.
+  4. Fallback offline (parse_offline_html) che fa la stessa cosa partendo
+     dall'HTML statico/renderizzato salvato nel DB.
+
+"""
+
 import re
 import json
 from typing import Any, Dict, List, Optional, Set
@@ -77,6 +101,14 @@ _NOISE_EXACT: Set[str] = {
     "riproduzioni", "plays", "streams",
     # Bottoni episodio/podcast (etichette button visibili)
     "play episode", "riproduci episodio",
+    # Pulsanti di "carica/mostra altri" (verificati live su pagine reali)
+    "carica altri episodi", "load more episodes",
+    "mostra tutto", "show all", "vedi tutto",
+    "vedi discografia", "see discography",
+    "altri episodi", "more episodes",
+    # Marker "Explicit": Spotify rende l'icona come testo singolo "E"
+    # vicino al titolo di un brano. Filtriamolo per non sporcare la tokenizzazione.
+    "e",
     # Altri elementi UI di navigazione globale (sidebar/topbar)
     "esplora", "explore", "cerca", "search",
     "home", "la tua libreria", "your library",
@@ -102,6 +134,10 @@ _NOISE_PATTERNS: List[re.Pattern] = [
     re.compile(r'^.{0,50}(facebook|instagram|twitter|x\.com|tiktok|youtube)\b.*$', re.IGNORECASE),
     re.compile(r'^.{0,30}salta\s+al\s+contenuto.*$', re.IGNORECASE),
     re.compile(r'^skip\s+to\s+content.*$', re.IGNORECASE),
+    # Copyright phonogram "℗ 2016 The copyright in this sound recording is owned..."
+    # Verificato live sulle pagine album.
+    re.compile(r'^[℗©]\s*\d{4}.*$'),
+    re.compile(r'^.{0,80}sound\s+recording\s+is\s+owned.*$', re.IGNORECASE),
 ]
 
 
@@ -142,6 +178,13 @@ _FOOTER_CUTOFF: List[re.Pattern] = [
     re.compile(r'^\s*discography\s*$', re.IGNORECASE),
     re.compile(r'^\s*similar\s+(?:shows|podcasts|playlists)?\s*$', re.IGNORECASE),
     re.compile(r'^\s*recommended\s+for\s+you\s*$', re.IGNORECASE),
+    # Frasi VERIFICATE LIVE su Spotify (heading <h2> dei widget di consigliati)
+    re.compile(r'^\s*altro\s+di\s+.+', re.IGNORECASE),               # "Altro di J-AX"
+    re.compile(r'^\s*altri\s+podcast\s+simili\s*$', re.IGNORECASE),  # podcast
+    re.compile(r'^\s*altri\s+album\s+simili\s*$', re.IGNORECASE),
+    re.compile(r'^\s*altri\s+brani\s+simili\s*$', re.IGNORECASE),
+    re.compile(r'^\s*altri\s+artisti\s+simili\s*$', re.IGNORECASE),
+    re.compile(r'^\s*more\s+from\s+.+', re.IGNORECASE),               # English
 ]
 
 
@@ -174,9 +217,15 @@ _EXCLUDED_SELECTORS: List[str] = [
     "[data-testid='language-selector']",
     "[data-testid='upgrade-button']",
     "[data-testid='install-app-button']",
-    # Sezioni di RACCOMANDAZIONI sotto il contenuto principale
-    # (i selettori veri li nomina Spotify con prefissi tipo "discography",
-    # "fans-also-like", "related", "featured-on", "more-by", ecc.)
+    # Sezioni di RACCOMANDAZIONI sotto il contenuto principale.
+    # VERIFICATO LIVE: Spotify usa esclusivamente "component-shelf" per i widget
+    # di consigliati ("Altro di X", "Altri podcast simili", "Vedi discografia").
+    # La tracklist principale e gli episodi NON sono mai dentro un component-shelf.
+    # Quindi possiamo rimuovere TUTTI gli shelf in un colpo solo.
+    "[data-testid='component-shelf']",
+    "[data-testid='see-all-link']",
+    "[data-testid='rich-title-row-shelf-header']",
+    # Selettori euristici aggiuntivi (sito può evolvere, manteniamo per robustezza)
     "[data-testid='discography']",
     "[data-testid*='more-by']",
     "[data-testid*='fans-also-like']",
@@ -203,17 +252,55 @@ class SpotifyParser(BaseWebParser):
         super().__init__()
 
 
+        # Script JS eseguito da Crawl4AI dopo il primo render.
+        # Cliccare iterativamente SOLO i <button> "Carica altri episodi" / "Mostra altro"
+        # che caricano contenuto in-place. Evitiamo i link <a> (es. "Mostra tutto",
+        # "Vedi discografia") perché NAVIGANO via dalla pagina, distruggendo il DOM
+        # corrente — verificato live sul podcast One to One: cliccare l'<a>
+        # "Mostra tutto" porta a una pagina diversa e i 12 episodi del DOM scompaiono.
+        click_show_more_js = """
+        (async () => {
+          const matchers = [
+            /carica\\s+altri/i,
+            /mostra\\s+(altro|di\\s+più)/i,
+            /show\\s+more/i,
+            /load\\s+more/i,
+          ];
+          // Scrolla in fondo per attivare eventuali virtual list lazy-load
+          window.scrollTo(0, document.body.scrollHeight);
+          await new Promise(r => setTimeout(r, 1200));
+          for (let pass = 0; pass < 12; pass++) {
+            // SOLO button (non <a>) per evitare navigazioni esterne
+            const btns = Array.from(document.querySelectorAll('button'))
+              .filter(b => {
+                const t = (b.innerText || '').trim();
+                return t && matchers.some(m => m.test(t)) && b.offsetParent !== null;
+              });
+            if (btns.length === 0) break;
+            for (const b of btns) {
+              try { b.scrollIntoView({block: 'center'}); b.click(); } catch (e) {}
+            }
+            await new Promise(r => setTimeout(r, 1500));
+            window.scrollTo(0, document.body.scrollHeight);
+            await new Promise(r => setTimeout(r, 500));
+          }
+        })();
+        """
+
+
         # Configurazione Crawl4AI:
         #  * Attendiamo network-idle e diamo 3s di delay per la idratazione React
         #  * css_selector="main" limita a ciò che React renderizza come contenuto
         #  * exclude_* riduce link esterni/social a monte
         #  * excluded_tags toglie tag strutturali non semantici
         #  * excluded_selector è la lista mirata di componenti di "chrome" UI
+        #  * scan_full_page + js_code: scrolla la pagina e clicca i "Mostra altro"
+        #    per catturare anche brani/episodi caricati on-demand
         self.run_config = CrawlerRunConfig(
             cache_mode=CacheMode.BYPASS,
             wait_until="networkidle",
             delay_before_return_html=3,
-            page_timeout=30000,
+            page_timeout=45000,
             exclude_external_links=True,
             exclude_social_media_links=True,
             exclude_all_images=True,
@@ -221,14 +308,61 @@ class SpotifyParser(BaseWebParser):
             excluded_tags=["nav", "footer", "header", "aside",
                            "script", "style", "noscript", "form"],
             excluded_selector=", ".join(_EXCLUDED_SELECTORS),
+            scan_full_page=True,
+            scroll_delay=0.5,
+            js_code=[click_show_more_js],
         )
 
 
     # ------------------------------------------------------------------
-    # FALLBACK TITLE
+    # ESTRAZIONE DATI: forziamo il titolo dal <title> dell'HTML renderizzato.
+    #
+    # Motivo: Spotify è una SPA. L'HTML statico ha <title>Spotify – Web Player</title>
+    # e solo dopo l'idratazione di React il <title> viene riscritto in quello vero
+    # (es. "Comunisti col Rolex - Album di J-AX, Fedez | Spotify"). Crawl4AI a volte
+    # popola `result.metadata.title` con il valore pre-rendering, quindi il flusso
+    # ereditato della base class può restituire un titolo errato.
+    # Qui ribaltiamo l'ordine: PRIMA leggiamo <title> dal DOM finale, poi metadata,
+    # e solo come ultima spiaggia ricadiamo sull'URL.
     # ------------------------------------------------------------------
+    def extract_data(self, result):  # type: ignore[override]
+        url = getattr(result, "url", "") or ""
+        domain = "" if url.startswith("raw:") else urlparse(url).netloc
+
+
+        # Se il crawl è fallito, restituiamo struttura vuota (come la base class)
+        if not getattr(result, "success", True):
+            return {"url": url, "domain": domain, "title": "",
+                    "html_text": "", "parsed_text": ""}
+
+
+        html = getattr(result, "html", "") or ""
+
+
+        # PRIORITÀ 1: <title> del DOM renderizzato
+        title = self._extract_html_title(html) if html else None
+        # PRIORITÀ 2: metadata di Crawl4AI (potrebbe essere stale ma è meglio di niente)
+        if not title and getattr(result, "metadata", None):
+            title = result.metadata.get("title")
+        # PRIORITÀ 3: titolo derivato dall'URL (solo se i due sopra falliscono)
+        if not title:
+            title = self.extract_fallback_title(url)
+
+
+        return {
+            "url": url,
+            "domain": domain,
+            "title": title or "",
+            "html_text": html,
+            "parsed_text": self.extract_and_clean_text(result) or "",
+        }
+
+
     def extract_fallback_title(self, url: str) -> Optional[str]:
-        """Costruisce un titolo leggibile dalla path: '/album/<id>' -> 'Album <id> | Spotify'."""
+        """
+        Ultima spiaggia: titolo derivato dalla path URL.
+        Usato SOLO quando il <title> HTML è vuoto e i metadata non hanno valore.
+        """
         if not url:
             return None
         parsed = urlparse(url)
@@ -506,4 +640,3 @@ class SpotifyParser(BaseWebParser):
             for it in node:
                 out.extend(self._flatten_jsonld(it))
         return out
-
