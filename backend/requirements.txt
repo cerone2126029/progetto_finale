@@ -4,3 +4,4 @@ uvicorn
 crawl4ai
 beautifulsoup4
 mistune
+mariadb
