@@ -1,41 +1,46 @@
-# DOCKERFILE BACKEND 
+# DOCKERFILE BACKEND
+# Container che ospita FastAPI + i parser + il connettore MariaDB + il client Ollama.
 
-# 1. Utilizzo dell'immagine base Python ufficiale in versione "slim" 
-# per garantire un ambiente leggero ma completo.
+
 FROM python:3.10-slim
 
-# 2. Definizione della directory di lavoro all'interno del container.
-# Viene chiamata "/progetto" per coerenza con la struttura root definita nelle specifiche.
+
 WORKDIR /progetto
 
-# 3. OTTIMIZZAZIONE CACHE: Copiamo prima solo il file dei requisiti.
-# Docker creerà un layer separato per le dipendenze; se il codice cambia 
-# ma i requisiti no, questo step verrà saltato nelle build successive (build veloce).
+
+# Dipendenze di sistema:
+#   * libmariadb-dev + gcc: necessari a compilare/linkare il client Python MariaDB
+#   * curl/ca-certificates: utili per healthcheck e fetch da Ollama
+# Le installiamo prima del pip install per sfruttare la cache dei layer Docker.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libmariadb-dev \
+        gcc \
+        curl \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+
+# Installa le dipendenze Python (layer separato per ottimizzare la cache)
 COPY backend/requirements.txt ./backend/
 RUN pip install --no-cache-dir -r backend/requirements.txt
 
-# 4. CONFIGURAZIONE PLAYWRIGHT: Necessaria per il funzionamento di Crawl4AI.
-# Installiamo il browser Chromium in modalità headless e le relative 
-# librerie di sistema (dependencies) necessarie per l'esecuzione su Linux.
+
+# Setup Chromium per Crawl4AI (Playwright)
 RUN playwright install chromium
 RUN playwright install-deps
 
-# 5. COPIA DEL CODICE SORGENTE:
-# Copiamo l'intera cartella backend nella relativa sottodirectory del container.
+
+# Codice sorgente del backend
 COPY backend/ ./backend/
 
-# 6. COPIA DEI FILE CONDIVISI (DATA & CONFIG):
-# Questi file risiedono nella root del progetto e sono fondamentali 
-# per la logica di business (domini supportati e Gold Standard).
+
+# File condivisi (lista domini + Gold Standard JSON per il bootstrap del DB)
 COPY domains.json .
 COPY gs_data/ ./gs_data/
 
-# 7. ESPOSIZIONE PORTA:
-# Dichiariamo la porta 8003 come richiesto
+
 EXPOSE 8003
 
-# 8. COMANDO DI AVVIO:
-# Avviamo il server FastAPI tramite Uvicorn. 
-# Usiamo il modulo python -m per garantire che il PYTHONPATH sia risolto correttamente
-# partendo dalla root /progetto, puntando all'istanza 'app' dentro server.py.
+
+# Avvio del server (no reload in produzione)
 CMD ["python", "-m", "uvicorn", "backend.src.server:app", "--host", "0.0.0.0", "--port", "8003"]
