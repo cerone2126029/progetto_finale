@@ -25,14 +25,12 @@ DB_NAME = os.getenv("DB_NAME", "esonero")
 # -----------------------------------------------------------------------------
 # SCHEMA (DDL)
 # -----------------------------------------------------------------------------
-# Le prime due tabelle sono obbligatorie con nomi e colonne fissati dalla specifica.
-# Le altre sono libere e servono a memorizzare valutazioni pre-calcolate.
 SCHEMA_DDL = [
     """
     CREATE TABLE IF NOT EXISTS web_resources (
-        url        VARCHAR(2048) NOT NULL,
-        domain     VARCHAR(255)  NOT NULL,
-        title      VARCHAR(2048) NOT NULL DEFAULT '',
+        url        VARCHAR(191) NOT NULL,
+        domain     VARCHAR(191) NOT NULL,
+        title      VARCHAR(255) NOT NULL DEFAULT '',
         html_text  LONGTEXT      NOT NULL,
         created_at DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (url)
@@ -40,7 +38,7 @@ SCHEMA_DDL = [
     """,
     """
     CREATE TABLE IF NOT EXISTS gold_standard (
-        url        VARCHAR(2048) NOT NULL,
+        url        VARCHAR(191) NOT NULL,
         gold_text  LONGTEXT      NOT NULL,
         created_at DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (url),
@@ -50,7 +48,7 @@ SCHEMA_DDL = [
     """,
     """
     CREATE TABLE IF NOT EXISTS evaluations (
-        url        VARCHAR(2048) NOT NULL,
+        url        VARCHAR(191) NOT NULL,
         metrics    LONGTEXT      NOT NULL,
         created_at DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (url),
@@ -60,8 +58,8 @@ SCHEMA_DDL = [
     """,
     """
     CREATE TABLE IF NOT EXISTS judge_evaluations (
-        url            VARCHAR(2048) NOT NULL,
-        model_name     VARCHAR(255)  NOT NULL,
+        url            VARCHAR(191)  NOT NULL,
+        model_name     VARCHAR(191)  NOT NULL,
         judge_score    INT           NOT NULL,
         judge_feedback TEXT          NOT NULL,
         created_at     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,

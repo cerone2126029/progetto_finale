@@ -13,3 +13,11 @@ __pycache__/
 # File di configurazione degli editor (opzionale ma consigliato)
 .vscode/
 .idea/
+
+# Cartelle di dati che NON devono finire su GitHub
+mariadb_data/
+ollama_data/
+venv/
+__pycache__/
+.DS_Store
+*.db
