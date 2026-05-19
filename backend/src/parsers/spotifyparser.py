@@ -47,13 +47,50 @@ _NOISE_EXACT: Set[str] = {
     "accedi", "log in", "sign up", "sign in",
     "scarica", "scarica l'app", "apri l'app", "apri in app",
     "apri spotify", "use the web player", "usa il web player",
+    "scarica l'app gratuita", "ascolta in app",
     # Brand / generici
     "spotify", "spotify free", "spotify premium", "premium",
     "anteprima", "preview", "play preview",
+    # Bottoni player / azioni della pagina (sono parole isolate, mai contenuto del gold)
+    "riproduci tutto", "play all",
+    "riproduzione casuale", "shuffle", "shuffle play",
+    "metti in pausa", "pause",
+    "salva", "save",
+    "segui", "follow", "seguito", "following", "non seguire più", "unfollow",
+    "aggiungi alla coda", "add to queue",
+    "aggiungi alla libreria", "add to your library",
+    "rimuovi dalla libreria", "remove from your library",
+    "condividi", "share", "copia link", "copy link",
+    "mostra crediti", "show credits",
+    "mostra di più", "mostra altro", "show more", "see more",
+    "mostra meno", "show less", "see less",
+    "carica altro", "load more",
+    "più opzioni", "more options",
+    "vai al brano", "go to song",
+    "vai all'album", "go to album",
+    "vai all'artista", "go to artist",
+    "vai al podcast", "go to podcast",
+    # Colonne tablist che NON appaiono nel gold di album/show
+    # (NOTA: NON includere "titolo"/"title"/"album"/"durata" perché compaiono
+    #  nel gold come header di sezione o come page type label.)
+    "data di aggiunta", "date added",
+    "riproduzioni", "plays", "streams",
+    # Bottoni episodio/podcast (etichette button visibili)
+    "play episode", "riproduci episodio",
+    # Altri elementi UI di navigazione globale (sidebar/topbar)
+    "esplora", "explore", "cerca", "search",
+    "home", "la tua libreria", "your library",
+    "crea playlist", "create playlist",
+    "playlist creata da te", "made for you",
+    "novità", "new releases",
+    "tendenze", "trending",
+    "sponsorizzato", "sponsored",
 }
 
 
 # Pattern (regex) di riga: la riga viene scartata se matcha INTERAMENTE.
+# NB: aria-label, alt e title non finiscono in get_text(), quindi i pattern
+# qui sotto coprono solo casi in cui Spotify rende il testo come visibile.
 _NOISE_PATTERNS: List[re.Pattern] = [
     re.compile(r'^\s*©\s*\d{4}.*$'),                              # "© 2024 Spotify AB"
     re.compile(r'^\s*\d{4}\s+Spotify(\s+AB)?\s*$', re.IGNORECASE),
@@ -62,17 +99,18 @@ _NOISE_PATTERNS: List[re.Pattern] = [
     re.compile(r'^.{0,40}(scarica|download).*app.*$', re.IGNORECASE),
     re.compile(r'^.{0,40}(apri|open).*app.*$', re.IGNORECASE),
     re.compile(r'^(iscriviti|accedi|log in|sign up)\b.*$', re.IGNORECASE),
-    re.compile(r'^anteprima\s+del\s+brano.*$', re.IGNORECASE),
-    re.compile(r'^play\s+preview.*$', re.IGNORECASE),
     re.compile(r'^.{0,50}(facebook|instagram|twitter|x\.com|tiktok|youtube)\b.*$', re.IGNORECASE),
     re.compile(r'^.{0,30}salta\s+al\s+contenuto.*$', re.IGNORECASE),
     re.compile(r'^skip\s+to\s+content.*$', re.IGNORECASE),
 ]
 
 
-# Marker che indicano "da qui in giù è footer/legal/cookie": tronchiamo lì.
-# Cerchiamo questi pattern (case-insensitive, su tutta la riga) e tagliamo.
+# Marker che indicano "da qui in giù è footer/legal/cookie/consigliati": tronchiamo lì.
+# Match come PREFISSO della riga (case-insensitive). Tronchiamo tutto ciò che segue.
+# IMPORTANTE: non includere "Informazioni" da solo, perché lo show gold la usa
+# come header della sezione "About this podcast".
 _FOOTER_CUTOFF: List[re.Pattern] = [
+    # Footer Spotify
     re.compile(r'^\s*aziende\s*$', re.IGNORECASE),
     re.compile(r'^\s*company\s*$', re.IGNORECASE),
     re.compile(r'^\s*comunità\s*$', re.IGNORECASE),
@@ -82,21 +120,47 @@ _FOOTER_CUTOFF: List[re.Pattern] = [
     re.compile(r'^\s*informazioni legali\s*$', re.IGNORECASE),
     re.compile(r'^\s*legal\s*$', re.IGNORECASE),
     re.compile(r'^\s*©\s*\d{4}.*$'),
+    # Sezioni "consigliati / più di / featured on" -- queste sono il vero killer
+    # della precision. Spotify le mette SOTTO la tracklist o gli episodi.
+    re.compile(r'^\s*più\s+di\s+.+', re.IGNORECASE),               # "Più di J-AX"
+    re.compile(r'^\s*più\s+album\s+di\s+.+', re.IGNORECASE),       # "Più album di Fedez"
+    re.compile(r'^\s*più\s+podcast\s+di\s+.+', re.IGNORECASE),     # "Più podcast di ..."
+    re.compile(r'^\s*più\s+di\s+(?:questo|questi)\s+(?:artista|artisti|album|podcast)?\s*$', re.IGNORECASE),
+    re.compile(r'^\s*riproduzione\s+consigliata\s*$', re.IGNORECASE),
+    re.compile(r'^\s*hanno\s+apprezzato\s+anche\s*$', re.IGNORECASE),
+    re.compile(r'^\s*altre\s+playlist\s*$', re.IGNORECASE),
+    re.compile(r'^\s*episodi\s+simili\s*$', re.IGNORECASE),
+    re.compile(r'^\s*ti\s+potrebbe\s+piacere\s*$', re.IGNORECASE),
+    re.compile(r'^\s*discografia\s*$', re.IGNORECASE),
+    # English equivalents (some accounts default to EN)
+    re.compile(r'^\s*more\s+by\s+.+', re.IGNORECASE),
+    re.compile(r'^\s*more\s+like\s+this\s*$', re.IGNORECASE),
+    re.compile(r'^\s*you\s+might\s+also\s+like\s*$', re.IGNORECASE),
+    re.compile(r'^\s*fans\s+(?:also\s+)?like\s*$', re.IGNORECASE),
+    re.compile(r'^\s*also\s+by\s+.+', re.IGNORECASE),
+    re.compile(r'^\s*featured\s+on\s*$', re.IGNORECASE),
+    re.compile(r'^\s*discography\s*$', re.IGNORECASE),
+    re.compile(r'^\s*similar\s+(?:shows|podcasts|playlists)?\s*$', re.IGNORECASE),
+    re.compile(r'^\s*recommended\s+for\s+you\s*$', re.IGNORECASE),
 ]
 
 
 
 
 # Selettori CSS da rimuovere prima dell'estrazione del testo.
-# Coprono cookie banner, login wall, share box, "Apri in app" e simili.
+# Coprono cookie banner, login wall, share box, "Apri in app" e simili,
+# più (e questo è il bonus chiave) le sezioni di RECOMMENDED / FEATURED ON
+# che Spotify renderizza sotto il contenuto principale.
 _EXCLUDED_SELECTORS: List[str] = [
     "footer",
     "nav",
     "header",
     "aside",
+    # Cookie banner Spotify (OneTrust)
     "#onetrust-consent-sdk",
     "#onetrust-banner-sdk",
     "[data-testid='cookie-banner']",
+    # Auth / download / topbar
     "[data-testid='login-button']",
     "[data-testid='signup-button']",
     "[data-testid='download-link']",
@@ -110,6 +174,17 @@ _EXCLUDED_SELECTORS: List[str] = [
     "[data-testid='language-selector']",
     "[data-testid='upgrade-button']",
     "[data-testid='install-app-button']",
+    # Sezioni di RACCOMANDAZIONI sotto il contenuto principale
+    # (i selettori veri li nomina Spotify con prefissi tipo "discography",
+    # "fans-also-like", "related", "featured-on", "more-by", ecc.)
+    "[data-testid='discography']",
+    "[data-testid*='more-by']",
+    "[data-testid*='fans-also-like']",
+    "[data-testid*='featured-on']",
+    "[data-testid*='related']",
+    "[data-testid*='recommend']",
+    "[data-testid*='similar']",
+    "[data-testid*='discograph']",
     "[aria-label*='cookie' i]",
     "[aria-label*='lingua' i]",
     "[aria-label*='language' i]",
@@ -431,3 +506,4 @@ class SpotifyParser(BaseWebParser):
             for it in node:
                 out.extend(self._flatten_jsonld(it))
         return out
+
