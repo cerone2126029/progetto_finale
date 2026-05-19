@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Home – Pipeline Web Parser{% endblock %}
+{% block content %}
+
+<div class="grid grid-3">
+    <a href="/parser" class="card" style="text-decoration:none; color:inherit; text-align:center;">
+        <h2 style="margin-bottom: 5px;">Parser &amp; Evaluation</h2>
+        <p style="color: var(--muted); margin: 0;">Testa il parser su un URL libero o sul Gold Standard, con metriche e LLM Judge.</p>
+    </a>
+    <a href="/gs_builder" class="card" style="text-decoration:none; color:inherit; text-align:center;">
+        <h2 style="margin-bottom: 5px;">Gold Standard Builder</h2>
+        <p style="color: var(--muted); margin: 0;">Aggiungi, ispeziona e rimuovi entry del Gold Standard nel database.</p>
+    </a>
+    <a href="/stats" class="card" style="text-decoration:none; color:inherit; text-align:center;">
+        <h2 style="margin-bottom: 5px;">Stats</h2>
+        <p style="color: var(--muted); margin: 0;">Panoramica aggregata di risorse, metriche e judge score per dominio.</p>
+    </a>
+</div>
+
+<div class="card">
+    <h2>Stato del sistema</h2>
+    <div class="grid grid-3">
+        <div>
+            <span class="status-dot {% if status.backend == 'ok' %}ok{% else %}error{% endif %}"></span>
+            <strong>Backend</strong>
+            <span class="pill {% if status.backend == 'ok' %}ok{% else %}error{% endif %}">{{ status.backend }}</span>
+        </div>
+        <div>
+            <span class="status-dot {% if status.database == 'ok' %}ok{% else %}error{% endif %}"></span>
+            <strong>MariaDB</strong>
+            <span class="pill {% if status.database == 'ok' %}ok{% else %}error{% endif %}">{{ status.database }}</span>
+        </div>
+        <div>
+            <span class="status-dot {% if status.ollama == 'ok' %}ok{% else %}error{% endif %}"></span>
+            <strong>Ollama</strong>
+            <span class="pill {% if status.ollama == 'ok' %}ok{% else %}error{% endif %}">{{ status.ollama }}</span>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Domini supportati</h2>
+    {% if domains %}
+    <ul style="margin: 0; padding-left: 20px;">
+        {% for d in domains %}
+            <li><code>{{ d }}</code></li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <div class="alert warn">Nessun dominio caricato (backend irraggiungibile?).</div>
+    {% endif %}
+</div>
+
+{% endblock %}

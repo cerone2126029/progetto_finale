@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Gold Standard Builder{% endblock %}
+{% block content %}
+
+<div class="card">
+    <h2>Gold Standard Builder</h2>
+    <p style="color: var(--muted);">
+        Seleziona un dominio supportato, inserisci un URL e scarica l'HTML.
+        Copia poi il testo informativo dalla pagina nel browser e incollalo
+        nel campo "Gold text" per salvarlo nel database.
+    </p>
+</div>
+
+{% if flash %}
+    <div class="alert {{ flash.kind }}">{{ flash.message }}</div>
+{% endif %}
+
+<div class="card">
+    <h2>1. Scarica HTML</h2>
+    <form action="/gs_builder/fetch" method="post">
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label>Dominio</label>
+                <select name="domain" required>
+                    {% for d in domains %}
+                        <option value="{{ d }}" {% if d == selected_domain %}selected{% endif %}>{{ d }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>URL della pagina</label>
+                <input type="text" name="url" value="{{ submitted_url or '' }}" placeholder="https://..." required>
+            </div>
+        </div>
+        <button type="submit">Carica HTML</button>
+    </form>
+</div>
+
+{% if html_text %}
+<div class="card">
+    <h2>2. Inserisci il Gold Text</h2>
+    <p style="color: var(--muted);">
+        L'HTML scaricato è qui sotto a sinistra. Apri la pagina nel browser (
+        <a href="{{ submitted_url }}" target="_blank" style="color: var(--sapienza-red);">apri</a>
+        ) e copia il solo testo informativo nella casella a destra.
+    </p>
+
+    <form action="/gs_builder/save" method="post">
+        <input type="hidden" name="url" value="{{ submitted_url }}">
+        <input type="hidden" name="domain" value="{{ selected_domain }}">
+        <input type="hidden" name="html_text" value="{{ html_text|e }}">
+
+        <div class="grid grid-2">
+            <div>
+                <label>HTML scaricato (read-only)</label>
+                <textarea readonly rows="20">{{ html_text }}</textarea>
+            </div>
+            <div>
+                <label>Gold text (testo informativo, no markdown)</label>
+                <textarea name="gold_text" rows="20" required placeholder="Incolla qui il testo informativo: titolo + corpo dell'articolo, niente menu/sidebar/banner."></textarea>
+            </div>
+        </div>
+
+        <button type="submit">Salva nel database</button>
+    </form>
+</div>
+{% endif %}
+
+<div class="card">
+    <h2>URL già nel Gold Standard {% if selected_domain %}per <code>{{ selected_domain }}</code>{% endif %}</h2>
+    {% if gs_entries %}
+    <table>
+        <thead>
+            <tr>
+                <th>URL</th>
+                <th style="width: 120px;">Azione</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for url in gs_entries %}
+            <tr>
+                <td class="url-cell"><a href="{{ url }}" target="_blank" style="color: var(--sapienza-red);">{{ url }}</a></td>
+                <td>
+                    <form action="/gs_builder/delete" method="post" onsubmit="return confirm('Eliminare definitivamente questa entry?');" style="margin:0;">
+                        <input type="hidden" name="url" value="{{ url }}">
+                        <input type="hidden" name="domain" value="{{ selected_domain }}">
+                        <button type="submit" class="danger">Elimina</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <p style="color: var(--muted); margin-top: 10px;">{{ gs_entries|length }} risultati</p>
+    {% else %}
+    <p style="color: var(--muted);">Nessuna entry nel Gold Standard per questo dominio.</p>
+    {% endif %}
+</div>
+
+{% endblock %}

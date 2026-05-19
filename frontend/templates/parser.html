@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Parser &amp; Evaluation{% endblock %}
+{% block content %}
+
+<div class="card">
+    <h2>Parser &amp; Evaluation</h2>
+    <p style="color: var(--muted);">
+        Inserisci un URL o selezionalo dal Gold Standard. La modalità <strong>Live</strong> scarica
+        la pagina in tempo reale; <strong>Local</strong> usa l'HTML salvato nel DB (più veloce,
+        utile per re-parsing). Se l'URL è nel GS vengono mostrati anche metriche e judge.
+    </p>
+
+    <form action="/parser" method="post">
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label>URL di test</label>
+                <input type="text" name="url" value="{{ submitted_url or '' }}" placeholder="Es. https://en.wikipedia.org/wiki/Minerva" required>
+            </div>
+            <div class="form-group">
+                <label>oppure seleziona dal Gold Standard</label>
+                <select onchange="if (this.value) { this.form.url.value = this.value; }">
+                    <option value="">— scegli un URL del GS —</option>
+                    {% for u in gs_urls %}
+                        <option value="{{ u }}" {% if u == submitted_url %}selected{% endif %}>{{ u }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label>Modalità</label>
+            <div class="toggle-group">
+                <label>
+                    <input type="radio" name="mode" value="live" {% if mode != 'local' %}checked{% endif %}>
+                    <span>Live (download)</span>
+                </label>
+                <label>
+                    <input type="radio" name="mode" value="local" {% if mode == 'local' %}checked{% endif %}>
+                    <span>Local (HTML dal DB)</span>
+                </label>
+            </div>
+        </div>
+
+        <button type="submit">Esegui parsing e valutazione</button>
+    </form>
+</div>
+
+{% if error %}
+    <div class="alert error">Errore: {{ error }}</div>
+{% endif %}
+
+{% if result %}
+    <div class="card">
+        <h2>Risultato per <a href="{{ result.url }}" target="_blank" style="color: var(--sapienza-red);">{{ result.url }}</a></h2>
+        <p style="color: var(--muted); margin-top: 0;">
+            Dominio: <code>{{ result.domain }}</code> · Titolo: <strong>{{ result.title or '(nessuno)' }}</strong>
+        </p>
+
+        {% if metrics %}
+            <div class="metric-row" style="margin-bottom: 20px;">
+                <div class="metric">Precision: <b>{{ '%.4f' % metrics.precision }}</b></div>
+                <div class="metric">Recall: <b>{{ '%.4f' % metrics.recall }}</b></div>
+                <div class="metric">F1: <b>{{ '%.4f' % metrics.f1 }}</b></div>
+                {% if judge %}
+                    <div class="metric">LLM Judge ({{ judge.model_name }}): <b>{{ judge.judge_score }}/5</b></div>
+                {% endif %}
+            </div>
+            {% if judge and judge.judge_feedback %}
+                <div class="alert ok"><strong>Giudizio LLM:</strong> {{ judge.judge_feedback }}</div>
+            {% endif %}
+        {% endif %}
+
+        <div class="grid grid-{% if result.gold_text %}3{% else %}2{% endif %}">
+            <div>
+                <label>HTML grezzo (input al parser)</label>
+                <textarea readonly rows="20">{{ result.html_text }}</textarea>
+            </div>
+            <div>
+                <label>Output del parser (Markdown)</label>
+                <textarea readonly rows="20">{{ result.parsed_text }}</textarea>
+            </div>
+            {% if result.gold_text %}
+                <div>
+                    <label>Gold Standard (riferimento)</label>
+                    <textarea readonly rows="20">{{ result.gold_text }}</textarea>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+{% endif %}
+
+{% endblock %}
