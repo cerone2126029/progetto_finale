@@ -1,8 +1,19 @@
-#Versione di docker compose
+# Orchestrazione dei 4 container del progetto.
+# Avviabile con: docker compose up --build
+# Porte esposte (obbligatorie da specifica):
+#   backend  -> 8003
+#   frontend -> 8004
+#   database -> 3306
+#   ollama   -> 11434
+
+
 version: '3.8'
 
+
 services:
-  #GESTIONE BACKEND
+  # ---------------------------------------------------------------------------
+  # BACKEND (FastAPI + parsers + LLM client + DB connector)
+  # ---------------------------------------------------------------------------
   backend:
     build:
       context: .
@@ -10,13 +21,29 @@ services:
     container_name: esonero-backend
     ports:
       - "8003:8003"
-    environment:                         
+    environment:
       - PYTHONPATH=/progetto
+      - DB_HOST=database
+      - DB_PORT=3306
+      - DB_USER=esonero
+      - DB_PASSWORD=esonero_pwd
+      - DB_NAME=esonero
+      - OLLAMA_HOST=http://ollama:11434
+      - OLLAMA_MODEL=llama3.2:3b
+    depends_on:
+      database:
+        condition: service_healthy
+      ollama:
+        condition: service_started
     deploy:
       resources:
         limits:
-          memory: 2G
-  #GESTIONE FRONTEND
+          memory: 4G
+
+
+  # ---------------------------------------------------------------------------
+  # FRONTEND (Jinja2 + HTML/CSS)
+  # ---------------------------------------------------------------------------
   frontend:
     build:
       context: .
@@ -28,3 +55,57 @@ services:
       - BACKEND_URL=http://backend:8003
     depends_on:
       - backend
+
+
+  # ---------------------------------------------------------------------------
+  # DATABASE (MariaDB)
+  # Healthcheck obbligatorio: il backend aspetta che il DB sia "healthy" prima
+  # di partire, così init_db.py trova il server già pronto.
+  # ---------------------------------------------------------------------------
+  database:
+    image: mariadb:11
+    container_name: esonero-database
+    ports:
+      - "3306:3306"
+    environment:
+      - MARIADB_ROOT_PASSWORD=root_pwd
+      - MARIADB_DATABASE=esonero
+      - MARIADB_USER=esonero
+      - MARIADB_PASSWORD=esonero_pwd
+    volumes:
+      - ./mariadb_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+
+  # ---------------------------------------------------------------------------
+  # OLLAMA (LLM server)
+  # Il modello viene scaricato al primo avvio tramite un entrypoint custom:
+  #   ollama serve & ollama pull <modello> && wait
+  # In questo modo non serve un'azione manuale dopo "docker compose up --build".
+  # ---------------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    container_name: esonero-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_MODEL=llama3.2:3b
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ollama serve &
+        SERVER_PID=$!
+        echo "[ollama] Attendo che il server sia pronto..."
+        until curl -sf http://localhost:11434/api/tags >/dev/null 2>&1; do
+          sleep 2
+        done
+        echo "[ollama] Server pronto. Pull del modello $$OLLAMA_MODEL..."
+        ollama pull $$OLLAMA_MODEL || echo "[ollama] Pull fallito, riprovo all'uso."
+        wait $$SERVER_PID
