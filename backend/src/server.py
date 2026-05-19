@@ -23,7 +23,8 @@ from pydantic import BaseModel
 # Le importazioni dei moduli logici sviluppati per l'esonero
 from parsers.wikipediaparser import WikipediaParser
 from parsers.scaruffiparser import ScaruffiParser
-from parsers.travelstategov import TravelStateGov 
+from parsers.travelstategov import TravelStateGov
+from parsers.spotifyparser import SpotifyParser 
 from evaluator import token_level_eval
 
 # Definizione dei percorsi assoluti per accedere in modo sicuro ai file statici
@@ -73,6 +74,8 @@ def get_domain_config(url_or_domain: str, is_url: bool = True):
         return "scaruffi", "dominio_scaruffi_gs.json"
     elif "travel.state.gov" in domain:
         return "travelstategov", "dominio_travelstategov_gs.json"
+    elif "spotify" in domain or "googleusercontent" in domain:
+        return "spotify", "dominio_spotify_gs.json"
     return None, None
 
 app = FastAPI(
@@ -86,6 +89,7 @@ def get_parser_instance(domain_type: str):
     if domain_type == "wikipedia": return WikipediaParser()
     if domain_type == "scaruffi": return ScaruffiParser()
     if domain_type == "travelstategov": return TravelStateGov()
+    if domain_type == "spotify": return SpotifyParser()
     raise HTTPException(status_code=400, detail="Parser non implementato per questo dominio.")
 
 # ==========================================
