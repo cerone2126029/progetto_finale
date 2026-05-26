@@ -244,7 +244,6 @@ class Database:
             )
             return cur.fetchall()
 
-
     def count_gs_by_domain(self) -> Dict[str, int]:
         with self.cursor() as cur:
             cur.execute(
