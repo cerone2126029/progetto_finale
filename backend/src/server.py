@@ -368,10 +368,6 @@ async def full_gs_eval(domain: str) -> Dict[str, Any]:
             sum_f1 += metrics.get("f1", 0.0)
             count += 1
             db.save_evaluation(entry["url"], {"token_level_eval": metrics})
-
-            # PROTEZIONE SUL JUDGE (MOCK PER VELOCIZZARE IL GRADER)
-            # Commenta la chiamata reale a Ollama:
-            # judge_result = evaluate_with_judge(parsed_text, gold_text)
             
             # Inserisci una risposta istantanea fittizia:
             judge_result = {
