@@ -116,7 +116,9 @@ class ParseRequest(BaseModel):
     local: Optional[bool] = False
 
 
-
+class JudgeRequest(BaseModel):
+    parsed_text: str
+    gold_text: str
 
 class EvaluateRequest(BaseModel):
     parsed_text: Optional[str] = ""
@@ -311,11 +313,19 @@ def evaluate(request: EvaluateRequest) -> Dict[str, Any]:
 
 
 @app.post("/evaluate_judge")
-def evaluate_judge(request: EvaluateRequest) -> Dict[str, Any]:
-    """Valutazione qualitativa tramite LLM-as-Judge (Ollama)."""
+async def evaluate_judge_route(request: JudgeRequest):
+    # Esegui la valutazione
     result = evaluate_with_judge(request.parsed_text, request.gold_text)
-    # I tre campi obbligatori dalla spec: model_name, judge_score, judge_feedback
-    return result
+    
+    # FORZA LA STRUTTURA: ignora quello che restituisce 'evaluate_with_judge' 
+    # e ricostruisci l'oggetto manualmente per essere al 100% sicuro della struttura
+    response = {
+        "model_name": str(result.get("model_name", "llama3.2:3b")),
+        "judge_score": int(result.get("judge_score", 1)),
+        "judge_feedback": str(result.get("judge_feedback", "Nessun feedback"))
+    }
+    
+    return response
 
 
 

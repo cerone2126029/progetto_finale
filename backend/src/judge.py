@@ -72,35 +72,19 @@ def _build_prompt(parsed_text: str, gold_text: str) -> str:
 
 
 def _extract_json(raw: str) -> Optional[dict]:
-    """
-    Estrae il primo oggetto JSON valido dal testo. I modelli piccoli spesso
-    aggiungono prefissi/suffissi nonostante l'istruzione 'solo JSON': qui
-    cerchiamo la prima graffa aperta e proviamo a chiuderla bilanciata.
-    """
-    if not raw:
-        return None
-    # Tentativo diretto
-    try:
-        return json.loads(raw.strip())
-    except json.JSONDecodeError:
-        pass
-    # Cerca il primo blocco { ... } bilanciato
+    if not raw: return None
+    # Pulisci da eventuali markdown (spesso i modelli nuovi mettono ```json)
+    raw = re.sub(r'```json\s*', '', raw)
+    raw = re.sub(r'```\s*', '', raw)
+    
+    # Cerca la prima { e l'ultima }
     start = raw.find("{")
-    while start != -1:
-        depth = 0
-        for i in range(start, len(raw)):
-            ch = raw[i]
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    snippet = raw[start:i + 1]
-                    try:
-                        return json.loads(snippet)
-                    except json.JSONDecodeError:
-                        break
-        start = raw.find("{", start + 1)
+    end = raw.rfind("}")
+    if start != -1 and end != -1:
+        try:
+            return json.loads(raw[start:end+1])
+        except:
+            return None
     return None
 
 
