@@ -91,10 +91,6 @@ def _extract_json(raw: str) -> Optional[dict]:
 
 
 def _fallback(parsed_text: str, gold_text: str, reason: str) -> Dict[str, object]:
-    """
-    Score euristico calcolato sulla copertura dei token, usato solo se l'LLM
-    non risponde o restituisce un formato non recuperabile.
-    """
     if not gold_text:
         return {"score": 1, "feedback": f"Fallback: {reason}. Nessun gold disponibile."}
     parsed_tokens = set(re.findall(r"\w+", (parsed_text or "").lower()))
@@ -104,7 +100,6 @@ def _fallback(parsed_text: str, gold_text: str, reason: str) -> Dict[str, object
     coverage = len(parsed_tokens & gold_tokens) / len(gold_tokens)
     score = max(1, min(5, int(round(1 + coverage * 4))))
     return {"score": score, "feedback": f"Fallback: {reason}. Coverage stimata {coverage:.2f}"}
-
 
 
 
@@ -120,58 +115,42 @@ def ollama_health(host: Optional[str] = None) -> bool:
 
 
 
-def evaluate_with_judge(parsed_text: str, gold_text: str,
-                        model: Optional[str] = None) -> Dict[str, object]:
-    """
-    Esegue la valutazione LLM-as-Judge.
-
-
-    Returns: dict con campi obbligatori dalla spec:
-        - model_name: nome modello utilizzato
-        - judge_score: intero 1..5
-        - judge_feedback: stringa
-    """
+async def evaluate_with_judge(parsed_text: str, gold_text: str,
+                              model: Optional[str] = None) -> Dict[str, object]:
     model_name = model or OLLAMA_MODEL
     prompt = _build_prompt(parsed_text or "", gold_text or "")
 
-
     try:
-        response = httpx.post(
-            f"{OLLAMA_HOST}/api/generate",
-            json={
-                "model": model_name,
-                "prompt": prompt,
-                "system": SYSTEM_PROMPT,
-                # Output deterministico e in formato JSON (Ollama supporta `format: "json"`
-                # per forzare il modello a produrre solo JSON valido).
-                "format": "json",
-                "stream": False,
-                "options": {"temperature": 0.0, "num_predict": 256},
-            },
-            timeout=REQUEST_TIMEOUT,
-        )
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:  # ← AsyncClient
+            response = await client.post(                                   # ← await
+                f"{OLLAMA_HOST}/api/generate",
+                json={
+                    "model": model_name,
+                    "prompt": prompt,
+                    "system": SYSTEM_PROMPT,
+                    "format": "json",
+                    "stream": False,
+                    "options": {"temperature": 0.0, "num_predict": 256},
+                },
+            )
     except Exception as e:
         result = _fallback(parsed_text, gold_text, f"Ollama irraggiungibile: {e}")
-        return {"model_name": model_name, **result}
-
+        return {"model_name": model_name, "judge_score": result["score"],
+                "judge_feedback": result["feedback"]}  # ← chiavi corrette
 
     if response.status_code != 200:
-        result = _fallback(parsed_text, gold_text,
-                           f"HTTP {response.status_code} da Ollama")
-        return {"model_name": model_name, **result}
-
+        result = _fallback(parsed_text, gold_text, f"HTTP {response.status_code}")
+        return {"model_name": model_name, "judge_score": result["score"],
+                "judge_feedback": result["feedback"]}
 
     raw = (response.json().get("response") or "").strip()
     data = _extract_json(raw)
 
-
     if not data or "score" not in data:
-        result = _fallback(parsed_text, gold_text,
-                           "LLM non ha rispettato il formato JSON richiesto")
-        return {"model_name": model_name, **result}
+        result = _fallback(parsed_text, gold_text, "LLM non ha rispettato il formato JSON")
+        return {"model_name": model_name, "judge_score": result["score"],
+                "judge_feedback": result["feedback"]}
 
-
-    # Normalizzazione: score deve essere int 1..5
     try:
         score = int(data["score"])
     except (TypeError, ValueError):
@@ -179,10 +158,8 @@ def evaluate_with_judge(parsed_text: str, gold_text: str,
     score = max(1, min(5, score))
     feedback = str(data.get("feedback") or "").strip()[:500]
 
-
     return {
         "model_name": model_name,
         "judge_score": score,
         "judge_feedback": feedback or "Nessun feedback fornito.",
     }
-

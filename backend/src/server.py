@@ -315,7 +315,7 @@ def evaluate(request: EvaluateRequest) -> Dict[str, Any]:
 @app.post("/evaluate_judge")
 async def evaluate_judge_route(request: JudgeRequest):
     # Esegui la valutazione
-    result = evaluate_with_judge(request.parsed_text, request.gold_text)
+    result = await evaluate_with_judge(request.parsed_text, request.gold_text)
     
     # FORZA LA STRUTTURA: ignora quello che restituisce 'evaluate_with_judge' 
     # e ricostruisci l'oggetto manualmente per essere al 100% sicuro della struttura
