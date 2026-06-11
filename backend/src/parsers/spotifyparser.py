@@ -65,17 +65,6 @@ class SpotifyParser(BaseWebParser):
         return "Spotify Content"
 
     @staticmethod
-    def extract_main_artist(lines: List[str], title: str) -> List[str]:
-        # Cerca l'artista subito sotto il titolo
-        for i, line in enumerate(lines):
-            if line == title and i + 1 < len(lines):
-                # Molto spesso la riga sotto il titolo è "Nome Artista • Anno • N brani"
-                candidate = lines[i+1].split('•')[0].strip()
-                if candidate and len(candidate) > 2 and candidate.lower() not in ["album", "singolo", "ep"]:
-                    return [candidate]
-        return []
-
-    @staticmethod
     def clean(text: str) -> str:
         if not text: return ""
         text = SpotifyParser.strip_links(text)
@@ -85,46 +74,40 @@ class SpotifyParser(BaseWebParser):
         
         non_empty = [l.strip() for l in lines if l.strip()]
         title = SpotifyParser.extract_title_from_raw(non_empty)
-        artists = SpotifyParser.extract_main_artist(non_empty, title)
         
         cleaned_lines = [header, "", title, ""]
-        if artists:
-            cleaned_lines.extend([artists[0], ""])
         
         noise = [
             "vai al contenuto", "skip to", "accedi", "iscriviti", "cookie", "©", "℗", "mostra altro",
             "scegli una lingua", "choose a language", "data di aggiunta", "date added", 
             "riproduzioni", "ascoltatori mensili", "monthly listeners", "carica altro", "load more",
-            "riproduci", "salva", "condividi", "altre opzioni", "more options", "fans also like"
+            "riproduci", "salva", "condividi", "altre opzioni", "more options"
         ]
         
         prev_line = None
         for line in lines:
             line = line.strip()
             
-            if not line: continue
+            if not line:
+                if cleaned_lines and cleaned_lines[-1] != "":
+                    cleaned_lines.append("")
+                continue
                 
-            low = line.lower()
-            if low == header.lower() or line == title: continue
-            if any(n in low for n in noise): continue
+            if line.lower() == header.lower() or line == title: continue
+            if any(n in line.lower() for n in noise): continue
             
-            # --- AGGIUNTA CHIRURGICA: Rimozione marker espliciti e anteprime ---
-            if low in ["e", "esplicito", "explicit", "anteprima", "preview", "testo", "lyrics"]: continue
+            # --- CAMBIAMENTO CHIRURGICO 1: Filtro esatto per le E ---
+            if line.lower() in ["e", "esplicito", "explicit", "anteprima", "preview", "testo", "lyrics"]: continue
             
             if bool(re.match(r'^\d{1,2}:\d{2}(:\d{2})?$', line)): continue
-            if bool(re.match(r'^\d+\s+(brani|songs),?.*$', low)): continue
-            if bool(re.match(r'^\d+$', line)): continue
-            if bool(re.match(r'^\d{4}$', line)): continue
+            if bool(re.match(r'^\d+\s+(brani|songs),?.*$', line.lower())): continue
             
-            # Rimozione ripetizioni dell'artista
-            skip_artist = False
-            for a in artists:
-                if a.lower() == low: skip_artist = True
-            if skip_artist: continue
+            # --- CAMBIAMENTO CHIRURGICO 2: IL FILTRO RIMOSSO! Manteniamo i numeri ---
+            # if bool(re.match(r'^\d+$', line)): continue
             
             line = SpotifyParser.fix_concatenations(line)
             
-            # --- AGGIUNTA CHIRURGICA: Deduplicazione consecutiva ---
+            # --- CAMBIAMENTO CHIRURGICO 3: Deduplicazione consecutiva ---
             if line and line != prev_line:
                 cleaned_lines.append(line)
                 prev_line = line
@@ -144,16 +127,23 @@ class SpotifyParser(BaseWebParser):
     def parse_offline_html(self, html_content: str) -> str:
         return self._orchestrate_extraction(html_content)
 
+    @staticmethod
+    def extract_main_artist(lines: List[str], title: str) -> List[str]:
+        for i, line in enumerate(lines):
+            if line == title and i + 1 < len(lines):
+                candidate = lines[i+1].split('•')[0].strip()
+                if candidate and len(candidate) > 2 and candidate.lower() not in ["album", "singolo", "ep"]:
+                    return [candidate]
+        return []
+
     def _orchestrate_extraction(self, html: str) -> str:
         if not html: return ""
         
-        # 1. Rimuoviamo la Google Cache e gli stili iniettati
         html = re.sub(r'<div[^>]*id="bN015htcoyT__google-cache-hdr"[^>]*>.*?</div>', '', html, flags=re.DOTALL|re.IGNORECASE)
         html = re.sub(r'<style[^>]*>.*?</style>', '', html, flags=re.DOTALL|re.IGNORECASE)
 
         soup = BeautifulSoup(html, "html.parser")
         
-        # 2. Rimuoviamo gli elementi UI noti
         ui_selectors = [
             "#onetrust-consent-sdk", "[data-testid='cookie-banner']", 
             "[data-testid='topbar']", "[data-testid='page-footer']",
@@ -174,10 +164,9 @@ class SpotifyParser(BaseWebParser):
         full_text = main_root.get_text(separator="\n", strip=True)
         header = SpotifyParser.detect_spotify_type(full_text)
         
-        # 3. Logica PRIMARIA: Data-TestId (Ottima per il Live)
         if header in ["Album", "Playlist pubblica"]:
             track_rows = main_root.select("[data-testid='tracklist-row']")
-            # --- AGGIUNTA CHIRURGICA: Abbassato il limite per includere gli EP ---
+            # --- CAMBIAMENTO CHIRURGICO 4: Len > 0 invece di 3 ---
             if track_rows and len(track_rows) > 0:
                 lines = []
                 title_tag = main_root.select_one("h1")
@@ -192,61 +181,56 @@ class SpotifyParser(BaseWebParser):
                             lines.append(txt)
                 return "\n".join(lines).strip()
 
-        # 4. Logica FALLBACK (Per Offline): "Il Distillatore"
         lines = full_text.split('\n')
         non_empty = [l.strip() for l in lines if l.strip()]
         title = SpotifyParser.extract_title_from_raw(non_empty)
         
-        # Tenta di capire l'artista principale per poi rimuoverlo dalle righe dei brani
         artists = SpotifyParser.extract_main_artist(non_empty, title)
         
-        # Generiamo il blocco iniziale richiesto dai Gold Standard
         extracted_lines = [header, "", title]
         
-        # Aggiungiamo l'artista se trovato
         if artists:
             extracted_lines.append(artists[0])
             
-        extracted_lines.append("") # Riga vuota prima delle tracce
+        extracted_lines.append("")
         
         start_idx = 0
-        # Troviamo dove iniziano effettivamente le tracce
         for i, line in enumerate(non_empty):
             if "brani," in line.lower() or "songs," in line.lower() or line == title:
                 start_idx = i + 1
                 break
                 
+        prev_line = None
         for line in non_empty[start_idx:]:
             low = line.lower()
             
-            # Condizioni di arresto per non leggere il footer
             if any(end in low for end in ["data di aggiunta", "date added", "©", "℗", "ti potrebbe", "more by", "ascoltatori", "fans also like"]):
                 break
                 
-            # Filtri di rumore base e numeri
-            if bool(re.match(r'^\d+$', line)): continue 
+            # --- IL FILTRO SUI NUMERI È STATO RIMOSSO ANCHE QUI ---
             if bool(re.match(r'^\d{1,2}:\d{2}(:\d{2})?$', line)): continue 
             if bool(re.match(r'^\d+\s+(brani|songs),?.*$', low)): continue 
             if low in ["e", "esplicito", "explicit", "anteprima", "preview", "testo", "lyrics", "riproduci", "salva"]: continue
             
-            # Ignora mesi o anni isolati
             if bool(re.match(r'^(gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\s+\d{4}$', low)): continue
             if bool(re.match(r'^\d{4}$', line)): continue
 
             line = SpotifyParser.fix_concatenations(line)
             
-            # --- LA SOTTRAZIONE DELL'ARTISTA ---
+            # --- CAMBIAMENTO CHIRURGICO 5: Sottrazione avanzata per bloccare duplicati dell'artista ---
             if header == "Album":
                 skip_line = False
                 for a in artists:
-                    if a.lower() == line.lower():
-                        skip_line = True
-                        break
+                    # Dividiamo per virgola per pulire "Sfera Ebbasta, Shiva"
+                    for sub_a in a.split(","):
+                        if sub_a.strip().lower() == line.lower():
+                            skip_line = True
+                            break
                 if skip_line: continue
                 
-            if line:
+            if line and line != prev_line:
                  extracted_lines.append(line)
+                 prev_line = line
 
-        # Usiamo la clean() come ultimo check ma uniamo con \n
         pre_cleaned_text = "\n".join(extracted_lines)
         return self.clean(pre_cleaned_text)
