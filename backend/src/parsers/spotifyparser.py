@@ -65,6 +65,17 @@ class SpotifyParser(BaseWebParser):
         return "Spotify Content"
 
     @staticmethod
+    def extract_main_artist(lines: List[str], title: str) -> List[str]:
+        # Cerca l'artista subito sotto il titolo
+        for i, line in enumerate(lines):
+            if line == title and i + 1 < len(lines):
+                # Molto spesso la riga sotto il titolo è "Nome Artista • Anno • N brani"
+                candidate = lines[i+1].split('•')[0].strip()
+                if candidate and len(candidate) > 2 and candidate.lower() not in ["album", "singolo", "ep"]:
+                    return [candidate]
+        return []
+
+    @staticmethod
     def clean(text: str) -> str:
         if not text: return ""
         text = SpotifyParser.strip_links(text)
@@ -74,38 +85,49 @@ class SpotifyParser(BaseWebParser):
         
         non_empty = [l.strip() for l in lines if l.strip()]
         title = SpotifyParser.extract_title_from_raw(non_empty)
+        artists = SpotifyParser.extract_main_artist(non_empty, title)
         
         cleaned_lines = [header, "", title, ""]
+        if artists:
+            cleaned_lines.extend([artists[0], ""])
         
         noise = [
             "vai al contenuto", "skip to", "accedi", "iscriviti", "cookie", "©", "℗", "mostra altro",
             "scegli una lingua", "choose a language", "data di aggiunta", "date added", 
             "riproduzioni", "ascoltatori mensili", "monthly listeners", "carica altro", "load more",
-            "riproduci", "salva", "condividi", "altre opzioni", "more options"
+            "riproduci", "salva", "condividi", "altre opzioni", "more options", "fans also like"
         ]
         
+        prev_line = None
         for line in lines:
             line = line.strip()
             
-            if not line:
-                if cleaned_lines and cleaned_lines[-1] != "":
-                    cleaned_lines.append("")
-                continue
+            if not line: continue
                 
-            if line.lower() == header.lower() or line == title: continue
-            if any(n in line.lower() for n in noise): continue
+            low = line.lower()
+            if low == header.lower() or line == title: continue
+            if any(n in low for n in noise): continue
+            
+            # --- AGGIUNTA CHIRURGICA: Rimozione marker espliciti e anteprime ---
+            if low in ["e", "esplicito", "explicit", "anteprima", "preview", "testo", "lyrics"]: continue
             
             if bool(re.match(r'^\d{1,2}:\d{2}(:\d{2})?$', line)): continue
-            if bool(re.match(r'^\d+\s+(brani|songs),?.*$', line.lower())): continue
-            
-            # --- CRITICAL ADDITION FOR OFFLINE ALBUMS/PLAYLISTS ---
-            # Offline pages lose structure. If a line is just a number (track number), skip it
-            # because the Gold Standard usually just lists track names, not numbers.
+            if bool(re.match(r'^\d+\s+(brani|songs),?.*$', low)): continue
             if bool(re.match(r'^\d+$', line)): continue
+            if bool(re.match(r'^\d{4}$', line)): continue
+            
+            # Rimozione ripetizioni dell'artista
+            skip_artist = False
+            for a in artists:
+                if a.lower() == low: skip_artist = True
+            if skip_artist: continue
             
             line = SpotifyParser.fix_concatenations(line)
-            if line:
+            
+            # --- AGGIUNTA CHIRURGICA: Deduplicazione consecutiva ---
+            if line and line != prev_line:
                 cleaned_lines.append(line)
+                prev_line = line
             
         return "\n".join(cleaned_lines).strip()
 
@@ -121,17 +143,6 @@ class SpotifyParser(BaseWebParser):
 
     def parse_offline_html(self, html_content: str) -> str:
         return self._orchestrate_extraction(html_content)
-
-    @staticmethod
-    def extract_main_artist(lines: List[str], title: str) -> List[str]:
-        # Cerca l'artista subito sotto il titolo
-        for i, line in enumerate(lines):
-            if line == title and i + 1 < len(lines):
-                # Molto spesso la riga sotto il titolo è "Nome Artista • Anno • N brani"
-                candidate = lines[i+1].split('•')[0].strip()
-                if candidate and len(candidate) > 2 and candidate.lower() not in ["album", "singolo", "ep"]:
-                    return [candidate]
-        return []
 
     def _orchestrate_extraction(self, html: str) -> str:
         if not html: return ""
@@ -166,7 +177,8 @@ class SpotifyParser(BaseWebParser):
         # 3. Logica PRIMARIA: Data-TestId (Ottima per il Live)
         if header in ["Album", "Playlist pubblica"]:
             track_rows = main_root.select("[data-testid='tracklist-row']")
-            if track_rows and len(track_rows) > 3:
+            # --- AGGIUNTA CHIRURGICA: Abbassato il limite per includere gli EP ---
+            if track_rows and len(track_rows) > 0:
                 lines = []
                 title_tag = main_root.select_one("h1")
                 title = title_tag.get_text(strip=True) if title_tag else "Spotify Content"
@@ -188,11 +200,19 @@ class SpotifyParser(BaseWebParser):
         # Tenta di capire l'artista principale per poi rimuoverlo dalle righe dei brani
         artists = SpotifyParser.extract_main_artist(non_empty, title)
         
-        extracted_lines = [header, "", title, ""]
+        # Generiamo il blocco iniziale richiesto dai Gold Standard
+        extracted_lines = [header, "", title]
+        
+        # Aggiungiamo l'artista se trovato
+        if artists:
+            extracted_lines.append(artists[0])
+            
+        extracted_lines.append("") # Riga vuota prima delle tracce
         
         start_idx = 0
+        # Troviamo dove iniziano effettivamente le tracce
         for i, line in enumerate(non_empty):
-            if line == title or line.lower() == "titolo" or line.lower() == "title":
+            if "brani," in line.lower() or "songs," in line.lower() or line == title:
                 start_idx = i + 1
                 break
                 
@@ -200,21 +220,22 @@ class SpotifyParser(BaseWebParser):
             low = line.lower()
             
             # Condizioni di arresto per non leggere il footer
-            if any(end in low for end in ["data di aggiunta", "date added", "©", "℗", "ti potrebbe piacere", "more by", "ascoltatori mensili"]):
+            if any(end in low for end in ["data di aggiunta", "date added", "©", "℗", "ti potrebbe", "more by", "ascoltatori", "fans also like"]):
                 break
                 
-            # Filtri di rumore base
+            # Filtri di rumore base e numeri
             if bool(re.match(r'^\d+$', line)): continue 
             if bool(re.match(r'^\d{1,2}:\d{2}(:\d{2})?$', line)): continue 
             if bool(re.match(r'^\d+\s+(brani|songs),?.*$', low)): continue 
             if low in ["e", "esplicito", "explicit", "anteprima", "preview", "testo", "lyrics", "riproduci", "salva"]: continue
-            if len(line) < 2: continue
             
+            # Ignora mesi o anni isolati
+            if bool(re.match(r'^(gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\s+\d{4}$', low)): continue
+            if bool(re.match(r'^\d{4}$', line)): continue
+
             line = SpotifyParser.fix_concatenations(line)
             
             # --- LA SOTTRAZIONE DELL'ARTISTA ---
-            # Negli album offline, il layout spesso butta fuori "Titolo Brano \n Nome Artista".
-            # Il Gold Standard di solito NON vuole l'artista ad ogni riga.
             if header == "Album":
                 skip_line = False
                 for a in artists:
@@ -226,6 +247,6 @@ class SpotifyParser(BaseWebParser):
             if line:
                  extracted_lines.append(line)
 
-        # Usiamo la clean() come ultimo check
+        # Usiamo la clean() come ultimo check ma uniamo con \n
         pre_cleaned_text = "\n".join(extracted_lines)
         return self.clean(pre_cleaned_text)
