@@ -101,9 +101,9 @@ services:
     command:
       - |
         ollama serve &
-        SERVER_PID=$!
+        SERVER_PID=$$!
         echo "[ollama] Attendo che il server sia pronto..."
-        until curl -sf http://localhost:11434/api/tags >/dev/null 2>&1; do
+        until ollama list >/dev/null 2>&1; do
           sleep 2
         done
         echo "[ollama] Server pronto. Pull del modello $$OLLAMA_MODEL..."
