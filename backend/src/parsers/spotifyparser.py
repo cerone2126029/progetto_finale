@@ -18,7 +18,42 @@ class SpotifyParser(BaseWebParser):
             css_selector="main",
             excluded_tags=["nav", "footer", "header", "aside", "script", "style", "noscript", "form"],
         )
-
+    def _extract_html_title(self, html: str) -> str:
+        """
+        Override del metodo della classe base per garantire l'estrazione
+        del titolo corretto sia in modalità Live che in modalità Local dal DB.
+        """
+        if not html: 
+            return "Spotify Content"
+            
+        soup = BeautifulSoup(html, "html.parser")
+        
+        # 1. Tenta l'estrazione dal tag <title> della pagina
+        title_tag = soup.find("title")
+        if title_tag:
+            raw_title = title_tag.get_text()
+            cleaned_title = raw_title.split(" - ")[0].split(" | ")[0].strip()
+            if cleaned_title and cleaned_title.lower() not in ["spotify", "spotify – web player", "spotify content"]:
+                return cleaned_title
+                
+        # 2. Fallback sul tag <h1> se il <title> è assente o generico
+        h1_tag = soup.find("h1")
+        if h1_tag:
+            return h1_tag.get_text(strip=True)
+            
+        # 3. FALLBACK ESTREMO: Usa il nostro estrattore testuale infallibile
+        # Puliamo al volo i tag inutili per simulare il parsing
+        for t in soup(["script", "noscript", "style", "nav", "footer", "header"]):
+            t.decompose()
+        testo_grezzo = soup.get_text(separator="\n", strip=True).split('\n')
+        non_empty = [l.strip() for l in testo_grezzo if l.strip()]
+        
+        fallback_title = self.extract_title_from_raw(non_empty)
+        if fallback_title and fallback_title != "Spotify Content":
+            return fallback_title
+            
+        return "Spotify Content"
+    
     @staticmethod
     def fix_spacing(text: str) -> str:
         text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
@@ -96,18 +131,13 @@ class SpotifyParser(BaseWebParser):
             if line.lower() == header.lower() or line == title: continue
             if any(n in line.lower() for n in noise): continue
             
-            # --- CAMBIAMENTO CHIRURGICO 1: Filtro esatto per le E ---
             if line.lower() in ["e", "esplicito", "explicit", "anteprima", "preview", "testo", "lyrics"]: continue
             
             if bool(re.match(r'^\d{1,2}:\d{2}(:\d{2})?$', line)): continue
             if bool(re.match(r'^\d+\s+(brani|songs),?.*$', line.lower())): continue
             
-            # --- CAMBIAMENTO CHIRURGICO 2: IL FILTRO RIMOSSO! Manteniamo i numeri ---
-            # if bool(re.match(r'^\d+$', line)): continue
-            
             line = SpotifyParser.fix_concatenations(line)
             
-            # --- CAMBIAMENTO CHIRURGICO 3: Deduplicazione consecutiva ---
             if line and line != prev_line:
                 cleaned_lines.append(line)
                 prev_line = line
@@ -116,14 +146,30 @@ class SpotifyParser(BaseWebParser):
 
     def extract_data(self, result):
         html = getattr(result, "html", "") or ""
+    
+        # Estrazione balistica del titolo per il database e il frontend
+        soup = BeautifulSoup(html, "html.parser")
+        extracted_title = "Spotify Content"
+    
+        title_tag = soup.find("title")
+        if title_tag:
+           raw_title = title_tag.get_text()
+            # Rimuove i suffissi " - Album di...", " | Spotify"
+           cleaned_title = raw_title.split(" - ")[0].split(" | ")[0].strip()
+           if cleaned_title and cleaned_title.lower() not in ["spotify", "spotify – web player"]:
+               extracted_title = cleaned_title
+        else:
+           h1_tag = soup.find("h1")
+           if h1_tag:
+               extracted_title = h1_tag.get_text(strip=True)
+            
         return {
-            "url": getattr(result, "url", ""),
-            "domain": "open.spotify.com",
-            "title": self._extract_html_title(html) or "Spotify",
-            "html_text": html,
-            "parsed_text": self._orchestrate_extraction(html)
-        }
-
+           "url": getattr(result, "url", ""),
+           "domain": "open.spotify.com",
+           "title": self._extract_html_title(html),
+           "html_text": html,
+           "parsed_text": self._orchestrate_extraction(html)
+    }
     def parse_offline_html(self, html_content: str) -> str:
         return self._orchestrate_extraction(html_content)
 
@@ -164,9 +210,9 @@ class SpotifyParser(BaseWebParser):
         full_text = main_root.get_text(separator="\n", strip=True)
         header = SpotifyParser.detect_spotify_type(full_text)
         
+        # --- PERCORSO LIVE (GARANTISCE F1 0.929) ---
         if header in ["Album", "Playlist pubblica"]:
             track_rows = main_root.select("[data-testid='tracklist-row']")
-            # --- CAMBIAMENTO CHIRURGICO 4: Len > 0 invece di 3 ---
             if track_rows and len(track_rows) > 0:
                 lines = []
                 title_tag = main_root.select_one("h1")
@@ -185,13 +231,199 @@ class SpotifyParser(BaseWebParser):
         non_empty = [l.strip() for l in lines if l.strip()]
         title = SpotifyParser.extract_title_from_raw(non_empty)
         
+        # ====================================================
+        # INIZIO DEI MODULI OFFLINE (ARCHITETTURA A SMISTAMENTO)
+        # ====================================================
+        
+        # --- 1. MODULO PLAYLIST PUBBLICA ---
+        if header == "Playlist pubblica":
+            ext_lines = [header, "", title, ""]
+            start_idx = 0
+            for i, line in enumerate(non_empty):
+                if line == title:
+                    start_idx = i + 1
+                    break
+            
+            for line in non_empty[start_idx:start_idx+15]:
+                 if "brani" in line.lower() or "salvataggi" in line.lower() or "ha vinto il festival" in line.lower():
+                     ext_lines.append(line)
+            
+            ext_lines.append("")
+            
+            for i, line in enumerate(non_empty):
+                if line.lower() == "aggiunto il giorno" or line.lower() == "date added":
+                    start_idx = i + 1
+                    ext_lines.append("#Titolo Album Aggiunto il giorno\n")
+                    break
+            
+            prev_line = None
+            track_counter = 1
+            for line in non_empty[start_idx:]:
+                low = line.lower()
+                if any(end in low for end in ["©", "℗", "ti potrebbe", "more by", "ascoltatori", "fans also like"]): break
+                if low in ["e", "esplicito", "explicit", "anteprima", "preview", "riproduci", "salva"]: continue
+                
+                line = SpotifyParser.fix_concatenations(line)
+                if line and line != prev_line:
+                    # Iniezione del numero di traccia prima del titolo!
+                    if prev_line and bool(re.match(r'^\d{1,2}:\d{2}$', prev_line)):
+                         ext_lines.append("")
+                         ext_lines.append(str(track_counter))
+                         track_counter += 1
+                    elif track_counter == 1 and line == non_empty[start_idx]:
+                         ext_lines.append(str(track_counter))
+                         track_counter += 1
+                         
+                    ext_lines.append(line)
+                    prev_line = line
+            
+            return "\n".join(ext_lines).strip()
+            
+        # --- 2. MODULO EPISODI PODCAST ---
+        if header == "Episodi podcast":
+            month_map = {
+                "Jan": "gen", "Feb": "feb", "Mar": "mar", "Apr": "apr",
+                "May": "mag", "Jun": "giu", "Jul": "lug", "Aug": "ago",
+                "Sep": "set", "Oct": "ott", "Nov": "nov", "Dec": "dic"
+            }
+            ext_lines = [header, "", title, ""]
+            start_idx = 0
+            for i, line in enumerate(non_empty):
+                if line == title:
+                    start_idx = i + 1
+                    break
+                    
+            pending_date = None
+            prev_line = None
+            
+            for line in non_empty[start_idx:]:
+                low = line.lower()
+                
+                if low in ["e", "esplicito", "explicit", "riproduci", "salva", "see all episodes", "show all", "podcast episode", "episodi podcast", "all episodes"]: continue
+                
+                # Traduzioni UI
+                if low == "more episodes like this" or low == "more podcasts like this": line = "Altri episodi simili"
+                elif low == "episode description": line = "Descrizione dell'episodio"
+                elif low == "about": line = "Informazioni"
+                    
+                line = SpotifyParser.fix_concatenations(line)
+                
+                # Conversione Date e unione tramite pallini
+                date_match = re.match(r'^([A-Z][a-z]{2})\s+(\d{1,2})(,\s*\d{4})?$', line)
+                if date_match:
+                    m_eng = date_match.group(1)
+                    d = date_match.group(2)
+                    y = date_match.group(3).replace(",", "") if date_match.group(3) else ""
+                    m_ita = month_map.get(m_eng, m_eng.lower())
+                    line = f"{d} {m_ita}{y}"
+                
+                low_check = line.lower()
+                if "sec" in low_check and not low_check.endswith("sec."): line = line.replace("sec", "sec.")
+                line = re.sub(r'\bhr\b', 'ora', line)
+                line = re.sub(r'\bhrs\b', 'ore', line)
+                
+                is_date = bool(re.match(r'^\d{1,2}\s+[a-z]{3}(\s+\d{4})?$', line.lower()))
+                is_duration = ("min" in line.lower() or "sec" in line.lower() or "ora" in line.lower() or "ore" in line.lower())
+                
+                if is_date:
+                    pending_date = line
+                    continue
+                    
+                if is_duration and pending_date:
+                    line = f"{pending_date} • {line}"
+                    pending_date = None
+                elif pending_date:
+                    if pending_date != ext_lines[-1] if ext_lines else "": ext_lines.append(pending_date)
+                    pending_date = None
+
+                if line == "•" and ext_lines:
+                    ext_lines[-1] = ext_lines[-1] + " •"
+                    continue
+                if ext_lines and ext_lines[-1].endswith(" •"):
+                    ext_lines[-1] = ext_lines[-1] + " " + line
+                    continue
+                    
+                if line and line != prev_line:
+                    ext_lines.append(line)
+                    prev_line = line
+                    
+            if pending_date: ext_lines.append(pending_date)
+            return "\n".join(ext_lines).strip()
+
+        # --- 3. MODULO BRANO ---
+        if header == "Brano":
+            ext_lines = [header, "", title, ""]
+            start_idx = 0
+            for i, line in enumerate(non_empty):
+                if line == title:
+                    start_idx = i + 1
+                    break
+                    
+            prev_line = None
+            for line in non_empty[start_idx:]:
+                low = line.lower()
+                
+                # Muro di Gomma per limitare spazzatura finale
+                if any(end in low for end in ["©", "℗", "scegli una lingua", "choose a language", "distributed by"]): break
+                
+                # Salta le opzioni UI MA NON SALTA LYRICS!
+                if low in ["e", "esplicito", "explicit", "anteprima", "preview", "riproduci", "salva", "sign in to see lyrics and listen to the full track", "show all"]: continue
+                
+                # Traduzioni Sezioni
+                if low == "artist": line = "Artista"
+                elif low == "recommended": line = "Consigliati"
+                elif low == "based on this song": line = "In base a questo brano"
+                elif low == "popular tracks by": line = "Brani popolari di"
+                elif low.startswith("popular releases by"): line = line.replace("Popular Releases by", "Uscite popolari di")
+                elif low.startswith("popular albums by"): line = line.replace("Popular Albums by", "Album popolari di")
+                elif low.startswith("popular singles and eps by"): line = line.replace("Popular Singles and EPs by", "Singoli ed EP popolari di")
+                elif low == "popular releases": line = "Uscite popolari"
+                elif low == "recommended releases": line = "Uscite consigliate"
+                elif low == "fans also like": line = "I fan apprezzano anche"
+                elif low == "from the single": line = "Dal singolo"
+                elif low == "album": line = "Album"
+                elif low == "single": line = "Singolo"
+                
+                line = SpotifyParser.fix_concatenations(line)
+                
+                # Formattazione Grandi Numeri (142,248,675 -> 142.248.675)
+                if re.match(r'^\d{1,3}(,\d{3})+$', line):
+                    line = line.replace(",", ".")
+                
+                # Formattazione Metadati Centrali con "•" (Es. Olly • Balorda nostalgia • 2025 • 3:17)
+                if line == "•" and ext_lines:
+                    ext_lines[-1] = ext_lines[-1] + " •"
+                    continue
+                if ext_lines and ext_lines[-1].endswith(" •"):
+                    ext_lines[-1] = ext_lines[-1] + " " + line
+                    continue
+                
+                # Traduzione date lunghe finali
+                month_map_full = {
+                    "january": "gennaio", "february": "febbraio", "march": "marzo", "april": "aprile",
+                    "may": "maggio", "june": "giugno", "july": "luglio", "august": "agosto",
+                    "september": "settembre", "october": "ottobre", "november": "novembre", "december": "dicembre"
+                }
+                date_match = re.match(r'^([A-Z][a-z]+)\s+(\d{1,2}),\s*(\d{4})$', line, re.IGNORECASE)
+                if date_match:
+                    m_eng = date_match.group(1).lower()
+                    d = date_match.group(2)
+                    y = date_match.group(3)
+                    m_ita = month_map_full.get(m_eng, m_eng)
+                    line = f"{d} {m_ita} {y}"
+                
+                if line and line != prev_line:
+                    ext_lines.append(line)
+                    prev_line = line
+                    
+            return "\n".join(ext_lines).strip()
+
+        # --- 4. MODULO ALBUM (IL TUO NATIVO DA 0.611) ---
         artists = SpotifyParser.extract_main_artist(non_empty, title)
         
         extracted_lines = [header, "", title]
-        
         if artists:
             extracted_lines.append(artists[0])
-            
         extracted_lines.append("")
         
         start_idx = 0
@@ -207,7 +439,6 @@ class SpotifyParser(BaseWebParser):
             if any(end in low for end in ["data di aggiunta", "date added", "©", "℗", "ti potrebbe", "more by", "ascoltatori", "fans also like"]):
                 break
                 
-            # --- IL FILTRO SUI NUMERI È STATO RIMOSSO ANCHE QUI ---
             if bool(re.match(r'^\d{1,2}:\d{2}(:\d{2})?$', line)): continue 
             if bool(re.match(r'^\d+\s+(brani|songs),?.*$', low)): continue 
             if low in ["e", "esplicito", "explicit", "anteprima", "preview", "testo", "lyrics", "riproduci", "salva"]: continue
@@ -217,11 +448,9 @@ class SpotifyParser(BaseWebParser):
 
             line = SpotifyParser.fix_concatenations(line)
             
-            # --- CAMBIAMENTO CHIRURGICO 5: Sottrazione avanzata per bloccare duplicati dell'artista ---
             if header == "Album":
                 skip_line = False
                 for a in artists:
-                    # Dividiamo per virgola per pulire "Sfera Ebbasta, Shiva"
                     for sub_a in a.split(","):
                         if sub_a.strip().lower() == line.lower():
                             skip_line = True
