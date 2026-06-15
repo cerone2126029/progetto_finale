@@ -6,8 +6,14 @@ from crawl4ai import CrawlerRunConfig, CacheMode
 from parsers.basewebparser import BaseWebParser
 
 class TravelStateGov(BaseWebParser):
-    
+
     def __init__(self):
+        """
+        Inizializza il parser per travel.state.gov configurando le opzioni di crawling.
+        Abilita la modalità 'magic' di Crawl4AI per gestire render complessi, bypassa la cache 
+        e ignora preventivamente elementi non semantici come link esterni, interni, 
+        immagini e social media per alleggerire il DOM in fase di analisi.
+        """
         super().__init__()
         self.run_config = CrawlerRunConfig(
             magic=True,
@@ -19,12 +25,22 @@ class TravelStateGov(BaseWebParser):
         )
 
     def extract_fallback_title(self, url: str) -> Optional[str]:
+        """
+        Restituisce un titolo statico di emergenza qualora l'estrazione dinamica
+        dal DOM dovesse fallire.
+        """
         return "Travel Advisory | Travel.State.gov"
 
     def clean_markdown(self, text: str) -> str:
+        """
+        Esegue una pulizia aggressiva del testo estratto tramite espressioni regolari.
+        Rimuove metadati orfani (es. "Last Updated"), stringhe di accessibilità per
+        screen reader (es. "Skip to main content"), form di feedback e simboli 
+        isolati tipici delle interfacce ad accordion (+, -, V, >, <).
+        """
+
         if not text: return ""
         
-        # Pulizia metadati orfani e intestazioni
         text = re.compile(r'^.*Last Updated:.*$', flags=re.IGNORECASE | re.MULTILINE).sub('', text)
         text = re.compile(r'^\s*Skip to (?:main )?content.*$', re.IGNORECASE | re.MULTILINE).sub('', text)
         text = re.compile(r'^\s*Was this page helpful\?.*$', re.IGNORECASE | re.MULTILINE).sub('', text)
@@ -39,7 +55,6 @@ class TravelStateGov(BaseWebParser):
                 continue
             if ln == prev: continue
             
-            # Filtro per i simboli dell'interfaccia degli accordion
             if ln in ["+", "-", "V", ">", "<", "•"]: continue
             
             prev = ln
@@ -49,14 +64,20 @@ class TravelStateGov(BaseWebParser):
         return re.sub(r'\n{3,}', '\n\n', res)
 
     def _extract_semantic_blocks(self, html: str) -> str:
+        """
+        Motore centrale di estrazione semantica per il dominio travel.state.gov.
+        Pulisce preventivamente il DOM dal boilerplate (navigazione, footer, 
+        menu a tendina delle nazioni) e tenta l'estrazione in due fasi:
+        1. Piano A: Ricerca selettori di componenti specifici AEM (es. alert, requisiti, ambasciate).
+        2. Piano B: Fallback sui macro-contenitori generici del sito se il Piano A non produce risultati.
+        """
+
         if not html: return ""
         soup = BeautifulSoup(html, "html.parser")
 
-        # Rimuoviamo il rumore di navigazione (incluso select per la lista nazioni)
         for tag in soup.select('nav, footer, header, script, style, noscript, svg, button, form, iframe, .usa-banner, .usa-footer, .megamenu, select'):
             tag.decompose()
 
-        # PIANO A: I mattoncini AEM per i Country Information Pages
         component_selectors = [
             '.hero-standard',
             '.cmp-traveladvisory',
@@ -74,8 +95,6 @@ class TravelStateGov(BaseWebParser):
                 if text:
                     extracted_pieces.append(text)
 
-        # PIANO B: Il Fallback per le pagine generiche (Visti, Passaporti, Info)
-        # Se l'array è vuoto, significa che nessuno dei selettori nazione ha matchato.
         if not extracted_pieces:
             fallback_selectors = [
                 ".tsg-rwd-main-copy-body-frame",
@@ -88,19 +107,20 @@ class TravelStateGov(BaseWebParser):
                 if container and container.get_text(strip=True):
                     text = container.get_text(separator="\n", strip=True)
                     extracted_pieces.append(text)
-                    break # Appena trova un macro-contenitore valido, si ferma.
+                    break 
 
-            # Fallback estremo se persino il main fallisce
             if not extracted_pieces and soup.body:
                 extracted_pieces.append(soup.body.get_text(separator="\n", strip=True))
 
         raw_text = "\n\n".join(extracted_pieces)
         return self.clean_markdown(raw_text)
 
-    # =================================================================
-    # UNIFICAZIONE: Entrambi i test (Live e Offline) ora usano il motore blindato
-    # =================================================================
     def extract_data(self, result):
+        """
+        Entry point principale del parser per i dati estratti dinamicamente dal crawler (Live).
+        Prepara e restituisce il dizionario strutturato con i metadati e il testo processato.
+        """
+
         html = getattr(result, "html", "") or ""
         return {
             "url": getattr(result, "url", ""),
@@ -111,7 +131,16 @@ class TravelStateGov(BaseWebParser):
         }
 
     def parse_offline_html(self, html_content: str) -> str:
+        """
+        Entry point secondario del parser per i dati provenienti dal Database (Modalità Local).
+        Invia direttamente l'HTML archiviato all'orchestratore semantico bypassando la rete.
+        """
+
         return self._extract_semantic_blocks(html_content)
 
     def extract_and_clean_text(self, result) -> str:
+        """
+        Metodo wrapper di utilità per richiamare direttamente l'estrazione semantica 
+        passando l'oggetto risultato del crawler.
+        """
         return self._extract_semantic_blocks(getattr(result, "html", "") or "")

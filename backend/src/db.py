@@ -4,27 +4,14 @@ import json
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Tuple
 
-
 import mariadb
 
-
-
-
-# -----------------------------------------------------------------------------
-# CONFIGURAZIONE
-# -----------------------------------------------------------------------------
 DB_HOST = os.getenv("DB_HOST", "database")
 DB_PORT = int(os.getenv("DB_PORT", "3306"))
 DB_USER = os.getenv("DB_USER", "esonero")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "esonero_pwd")
 DB_NAME = os.getenv("DB_NAME", "esonero")
 
-
-
-
-# -----------------------------------------------------------------------------
-# SCHEMA (DDL)
-# -----------------------------------------------------------------------------
 SCHEMA_DDL = [
     """
     CREATE TABLE IF NOT EXISTS web_resources (
@@ -71,30 +58,34 @@ SCHEMA_DDL = [
 ]
 
 
-
-
 class Database:
     """Wrapper sottile su MariaDB Connector/Python con metodi specifici del progetto."""
 
-
     def __init__(self) -> None:
+        """
+        Inizializza l'istanza del Database caricando le credenziali dalle variabili d'ambiente.
+        Imposta la modalità autocommit di default per le transazioni.
+        """
         self._conn_kwargs = dict(
             host=DB_HOST, port=DB_PORT,
             user=DB_USER, password=DB_PASSWORD,
             database=DB_NAME, autocommit=True,
         )
 
-
-    # ------------------------------------------------------------------
-    # Connection / health
-    # ------------------------------------------------------------------
     def _connect(self) -> mariadb.Connection:
-        return mariadb.connect(**self._conn_kwargs)
+        """
+        Stabilisce e restituisce una nuova connessione nativa verso MariaDB.
+        """
 
+        return mariadb.connect(**self._conn_kwargs)
 
     @contextmanager
     def cursor(self, dictionary: bool = False):
-        """Context manager che apre/chiude la connessione e il cursore."""
+        """
+        Context manager per gestire in sicurezza l'apertura e la chiusura 
+        di connessioni e cursori verso il database.
+        """
+
         conn = self._connect()
         try:
             cur = conn.cursor(dictionary=dictionary)
@@ -105,9 +96,12 @@ class Database:
         finally:
             conn.close()
 
-
     def ping(self) -> bool:
-        """Verifica se il DB è raggiungibile. Usato da /status."""
+        """
+        Verifica se il database è raggiungibile ed esegue query correttamente.
+        Utilizzato principalmente dall'endpoint di health check (/status).
+        """
+
         try:
             with self.cursor() as cur:
                 cur.execute("SELECT 1")
@@ -116,9 +110,12 @@ class Database:
         except Exception:
             return False
 
-
     def wait_until_ready(self, timeout: int = 60) -> None:
-        """Attende che il container MariaDB sia pronto (usato all'avvio)."""
+        """
+        Attende in modo bloccante che il container MariaDB sia pronto e accetti connessioni.
+        Utile in fase di startup dell'applicazione per evitare crash dovuti a race conditions.
+        """
+
         deadline = time.time() + timeout
         last_err: Optional[Exception] = None
         while time.time() < deadline:
@@ -132,22 +129,22 @@ class Database:
                 time.sleep(2)
         raise RuntimeError(f"Database non raggiungibile entro {timeout}s: {last_err}")
 
-
-    # ------------------------------------------------------------------
-    # Schema bootstrap
-    # ------------------------------------------------------------------
     def init_schema(self) -> None:
-        """Crea le tabelle obbligatorie + ausiliarie se non esistono."""
+        """
+        Inizializza lo schema del database. Crea le tabelle obbligatorie 
+        (web_resources, gold_standard, evaluations, judge_evaluations) 
+        se non esistono già.
+        """
         with self.cursor() as cur:
             for stmt in SCHEMA_DDL:
                 cur.execute(stmt)
 
-
-    # ------------------------------------------------------------------
-    # web_resources
-    # ------------------------------------------------------------------
     def upsert_web_resource(self, url: str, domain: str, title: str, html_text: str) -> None:
-        """Inserisce o aggiorna una risorsa web (idempotente)."""
+        """
+        Inserisce o aggiorna (upsert) una risorsa web nel database. 
+        L'operazione è idempotente basata sulla Primary Key (url).
+        """
+
         with self.cursor() as cur:
             cur.execute(
                 """
@@ -161,29 +158,40 @@ class Database:
                 (url, domain, title or "", html_text or ""),
             )
 
-
     def get_web_resource(self, url: str) -> Optional[Dict[str, Any]]:
+        """
+        Recupera i dettagli di una singola risorsa web.
+        """
+
         with self.cursor(dictionary=True) as cur:
             cur.execute("SELECT * FROM web_resources WHERE url = ?", (url,))
             return cur.fetchone()
 
-
     def delete_web_resource(self, url: str) -> bool:
+        """
+        Elimina una risorsa web dal database. Per l'effetto delle Foreign Key, 
+        elimina a cascata anche il relativo Gold Standard e le valutazioni associate.
+        """
+
         with self.cursor() as cur:
             cur.execute("DELETE FROM web_resources WHERE url = ?", (url,))
             return cur.rowcount > 0
 
-
     def count_web_resources_by_domain(self) -> Dict[str, int]:
+        """
+        Restituisce il numero totale di risorse web archiviate, raggruppate per dominio.
+        """
+
         with self.cursor() as cur:
             cur.execute("SELECT domain, COUNT(*) FROM web_resources GROUP BY domain")
             return {row[0]: int(row[1]) for row in cur.fetchall()}
 
-
-    # ------------------------------------------------------------------
-    # gold_standard
-    # ------------------------------------------------------------------
     def upsert_gold_standard(self, url: str, gold_text: str) -> None:
+        """
+        Inserisce o aggiorna (upsert) un testo Gold Standard associato a un URL.
+        L'URL deve già esistere nella tabella web_resources.
+        """
+
         with self.cursor() as cur:
             cur.execute(
                 """
@@ -194,9 +202,12 @@ class Database:
                 (url, gold_text or ""),
             )
 
-
     def get_gold_standard(self, url: str) -> Optional[Dict[str, Any]]:
-        """Join con web_resources per restituire anche domain/title/html_text."""
+        """
+        Recupera il Gold Standard per un dato URL, eseguendo una JOIN 
+        con web_resources per fornire il contesto completo.
+        """
+
         with self.cursor(dictionary=True) as cur:
             cur.execute(
                 """
@@ -209,14 +220,21 @@ class Database:
             )
             return cur.fetchone()
 
-
     def delete_gold_standard(self, url: str) -> bool:
+        """
+        Elimina il Gold Standard associato a un URL senza intaccare la risorsa web originale.
+        """
+
         with self.cursor() as cur:
             cur.execute("DELETE FROM gold_standard WHERE url = ?", (url,))
             return cur.rowcount > 0
 
-
     def list_gs_urls_by_domain(self, domain: str) -> List[str]:
+        """
+        Recupera una lista di tutti gli URL appartenenti a un determinato dominio
+        che posseggono un Gold Standard.
+        """
+
         with self.cursor() as cur:
             cur.execute(
                 """
@@ -229,8 +247,11 @@ class Database:
             )
             return [row[0] for row in cur.fetchall()]
 
-
     def list_gs_entries_by_domain(self, domain: str) -> List[Dict[str, Any]]:
+        """
+        Recupera tutte le entry complete del Gold Standard per un determinato dominio.
+        """
+
         with self.cursor(dictionary=True) as cur:
             cur.execute(
                 """
@@ -245,6 +266,10 @@ class Database:
             return cur.fetchall()
 
     def count_gs_by_domain(self) -> Dict[str, int]:
+        """
+        Restituisce il numero totale di Gold Standard archiviati, raggruppati per dominio.
+        """
+
         with self.cursor() as cur:
             cur.execute(
                 """
@@ -255,11 +280,12 @@ class Database:
             )
             return {row[0]: int(row[1]) for row in cur.fetchall()}
 
-
-    # ------------------------------------------------------------------
-    # evaluations  /  judge_evaluations
-    # ------------------------------------------------------------------
     def save_evaluation(self, url: str, metrics: Dict[str, Any]) -> None:
+        """
+        Salva o aggiorna i risultati delle metriche deterministiche (es. F1-Score) 
+        calcolate per uno specifico URL.
+        """
+
         with self.cursor() as cur:
             cur.execute(
                 """
@@ -270,9 +296,11 @@ class Database:
                 (url, json.dumps(metrics)),
             )
 
-
     def save_judge_evaluation(self, url: str, model_name: str,
                               judge_score: int, judge_feedback: str) -> None:
+        """
+        Salva o aggiorna i risultati della valutazione semantica prodotta dall'LLM.
+        """
         with self.cursor() as cur:
             cur.execute(
                 """
@@ -285,9 +313,12 @@ class Database:
                 (url, model_name, int(judge_score), judge_feedback or ""),
             )
 
-
     def avg_metrics_by_domain(self) -> Dict[str, Dict[str, float]]:
-        """Restituisce la media F1/precision/recall per dominio dalle valutazioni salvate."""
+        """
+        Calcola la media aggregata di Precision, Recall ed F1-Score raggruppata per dominio.
+        Esegue il parsing dinamico del JSON salvato nella colonna metrics.
+        """
+
         with self.cursor(dictionary=True) as cur:
             cur.execute(
                 """
@@ -297,7 +328,6 @@ class Database:
                 """
             )
             rows = cur.fetchall()
-
 
         agg: Dict[str, List[Tuple[float, float, float]]] = {}
         for row in rows:
@@ -321,8 +351,11 @@ class Database:
             }
         return out
 
-
     def avg_judge_by_domain(self) -> Dict[str, float]:
+        """
+        Calcola la media aggregata dei voti (1-5) assegnati dall'LLM, raggruppati per dominio.
+        """
+
         with self.cursor(dictionary=True) as cur:
             cur.execute(
                 """
@@ -335,12 +368,12 @@ class Database:
             return {row["domain"]: round(float(row["avg_score"] or 0.0), 4)
                     for row in cur.fetchall()}
 
-
-    # ------------------------------------------------------------------
-    # Introspezione schema (per /db_schema)
-    # ------------------------------------------------------------------
     def describe_schema(self) -> Dict[str, Dict[str, str]]:
-        """Costruisce dinamicamente la descrizione richiesta da /db_schema."""
+        """
+        Costruisce dinamicamente la descrizione dello schema estraendo metadati da information_schema.
+        Identifica tipi di dato, Primary Keys e Foreign Keys in modo automatico.
+        """
+
         result: Dict[str, Dict[str, str]] = {}
         with self.cursor(dictionary=True) as cur:
             cur.execute(
@@ -353,7 +386,6 @@ class Database:
                 (DB_NAME,),
             )
             cols = cur.fetchall()
-
 
             cur.execute(
                 """
@@ -369,7 +401,6 @@ class Database:
                 for row in cur.fetchall()
             }
 
-
         for row in cols:
             tbl, col = row["TABLE_NAME"], row["COLUMN_NAME"]
             descriptors = [row["COLUMN_TYPE"]]
@@ -381,9 +412,4 @@ class Database:
             result.setdefault(tbl, {})[col] = ", ".join(descriptors)
         return result
 
-
-
-
-# Singleton riusato da server.py e init_db.py
 db = Database()
-

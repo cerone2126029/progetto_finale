@@ -5,8 +5,13 @@ from bs4 import BeautifulSoup
 from crawl4ai import CrawlerRunConfig, CacheMode
 from parsers.basewebparser import BaseWebParser
 
-class SpotifyParser(BaseWebParser):
+class SpotifyParser(BaseWebParser):    
     def __init__(self):
+        """
+        Inizializza il parser Spotify configurando le opzioni di crawling.
+        Bypassa la cache, attende il caricamento della rete (networkidle)
+        e ignora script, style, nav e immagini per alleggerire il DOM.
+        """
         super().__init__()
         self.run_config = CrawlerRunConfig(
             cache_mode=CacheMode.BYPASS,
@@ -18,17 +23,18 @@ class SpotifyParser(BaseWebParser):
             css_selector="main",
             excluded_tags=["nav", "footer", "header", "aside", "script", "style", "noscript", "form"],
         )
+
     def _extract_html_title(self, html: str) -> str:
         """
         Override del metodo della classe base per garantire l'estrazione
         del titolo corretto sia in modalità Live che in modalità Local dal DB.
         """
+
         if not html: 
             return "Spotify Content"
             
         soup = BeautifulSoup(html, "html.parser")
         
-        # 1. Tenta l'estrazione dal tag <title> della pagina
         title_tag = soup.find("title")
         if title_tag:
             raw_title = title_tag.get_text()
@@ -36,13 +42,10 @@ class SpotifyParser(BaseWebParser):
             if cleaned_title and cleaned_title.lower() not in ["spotify", "spotify – web player", "spotify content"]:
                 return cleaned_title
                 
-        # 2. Fallback sul tag <h1> se il <title> è assente o generico
         h1_tag = soup.find("h1")
         if h1_tag:
             return h1_tag.get_text(strip=True)
             
-        # 3. FALLBACK ESTREMO: Usa il nostro estrattore testuale infallibile
-        # Puliamo al volo i tag inutili per simulare il parsing
         for t in soup(["script", "noscript", "style", "nav", "footer", "header"]):
             t.decompose()
         testo_grezzo = soup.get_text(separator="\n", strip=True).split('\n')
@@ -56,6 +59,11 @@ class SpotifyParser(BaseWebParser):
     
     @staticmethod
     def fix_spacing(text: str) -> str:
+        """
+        Corregge gli errori tipografici di spaziatura generati dal join di elementi DOM.
+        Separa CamelCase, Lettera-Numero e aggiunge spazi mancanti dopo parentesi chiuse.
+        """
+
         text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
         text = re.sub(r'([a-zA-Z])(\d)', r'\1 \2', text)
         text = re.sub(r'(\d)([a-zA-Z])', r'\1 \2', text)
@@ -65,6 +73,11 @@ class SpotifyParser(BaseWebParser):
 
     @staticmethod
     def fix_concatenations(line: str) -> str:
+        """
+        Ripara le concatenazioni errate che si verificano prima di parentesi quadre
+        (tipico nei tag estratti dalla cache) preservando eventuali link Markdown.
+        """
+
         line = re.sub(r'([a-zA-Z])\[', r'\1 [', line)
         parts = re.split(r'(\[[^\]]+\]\([^)]+\))', line)
         for i in range(len(parts)):
@@ -80,12 +93,22 @@ class SpotifyParser(BaseWebParser):
 
     @staticmethod
     def strip_links(text: str) -> str:
+        """
+        Rimuove la formattazione dei link Markdown `[testo](url)` lasciando solo il testo.
+        Rimuove completamente eventuali link vuoti `[](url)`.
+        """
+
         text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1 ', text)
         text = re.sub(r'\[\]\([^)]+\)', '', text)
         return text
 
     @staticmethod
     def detect_spotify_type(text: str) -> str:
+        """
+        Analizza semanticamente il testo grezzo per inferire la tipologia 
+        di contenuto musicale della pagina (Album, Brano, Playlist, Podcast).
+        """
+
         t = text.lower()
         if "playlist pubblica" in t or "public playlist" in t: return "Playlist pubblica"
         if "brano" in t or "lyrics" in t or "song" in t: return "Brano"
@@ -94,6 +117,11 @@ class SpotifyParser(BaseWebParser):
 
     @staticmethod
     def extract_title_from_raw(lines: List[str]) -> str:
+        """
+        Estrazione euristica del titolo ricercando la prima riga utile (lunghezza > 3)
+        nelle prime 15 righe del documento, saltando le parole chiave di cache e cookie.
+        """
+
         for line in lines[:15]:
             if len(line) > 3 and not any(noise in line.lower() for noise in ["spotify", "web player", "google", "cache", "cookie"]):
                 return line.strip()
@@ -101,6 +129,11 @@ class SpotifyParser(BaseWebParser):
 
     @staticmethod
     def clean(text: str) -> str:
+        """
+        Esegue una pulizia aggressiva finale del testo (soprattutto per fallback).
+        Filtra parole chiave note di UI, contatori, durate e rimuove righe vuote duplicate.
+        """
+
         if not text: return ""
         text = SpotifyParser.strip_links(text)
         lines = text.split('\n')
@@ -145,16 +178,18 @@ class SpotifyParser(BaseWebParser):
         return "\n".join(cleaned_lines).strip()
 
     def extract_data(self, result):
+        """
+        Entry point principale del parser per i dati estratti dal crawler (Live).
+        Prepara il dizionario con l'URL, il dominio, il titolo e l'output Markdown.
+        """
+
         html = getattr(result, "html", "") or ""
-    
-        # Estrazione balistica del titolo per il database e il frontend
         soup = BeautifulSoup(html, "html.parser")
         extracted_title = "Spotify Content"
     
         title_tag = soup.find("title")
         if title_tag:
            raw_title = title_tag.get_text()
-            # Rimuove i suffissi " - Album di...", " | Spotify"
            cleaned_title = raw_title.split(" - ")[0].split(" | ")[0].strip()
            if cleaned_title and cleaned_title.lower() not in ["spotify", "spotify – web player"]:
                extracted_title = cleaned_title
@@ -169,12 +204,23 @@ class SpotifyParser(BaseWebParser):
            "title": self._extract_html_title(html),
            "html_text": html,
            "parsed_text": self._orchestrate_extraction(html)
-    }
+        }
+
     def parse_offline_html(self, html_content: str) -> str:
+        """
+        Entry point secondario del parser per i dati provenienti dal Database (Local=True).
+        Invia direttamente l'HTML archiviato all'orchestratore.
+        """
+
         return self._orchestrate_extraction(html_content)
 
     @staticmethod
     def extract_main_artist(lines: List[str], title: str) -> List[str]:
+        """
+        Ricerca e identifica il nome dell'artista o del creatore principale,
+        solitamente posizionato subito sotto la riga del titolo dell'album/brano.
+        """
+
         for i, line in enumerate(lines):
             if line == title and i + 1 < len(lines):
                 candidate = lines[i+1].split('•')[0].strip()
@@ -183,6 +229,12 @@ class SpotifyParser(BaseWebParser):
         return []
 
     def _orchestrate_extraction(self, html: str) -> str:
+        """
+        Motore centrale del parser. Decostruisce il DOM HTML, smaltisce le interfacce
+        note (UI, banner, cache tag) e indirizza il flusso semantico verso
+        il modulo specializzato corrispondente (Live DOM, Playlist, Podcast, Brano, Album).
+        """
+
         if not html: return ""
         
         html = re.sub(r'<div[^>]*id="bN015htcoyT__google-cache-hdr"[^>]*>.*?</div>', '', html, flags=re.DOTALL|re.IGNORECASE)
@@ -210,7 +262,6 @@ class SpotifyParser(BaseWebParser):
         full_text = main_root.get_text(separator="\n", strip=True)
         header = SpotifyParser.detect_spotify_type(full_text)
         
-        # --- PERCORSO LIVE (GARANTISCE F1 0.929) ---
         if header in ["Album", "Playlist pubblica"]:
             track_rows = main_root.select("[data-testid='tracklist-row']")
             if track_rows and len(track_rows) > 0:
@@ -230,12 +281,7 @@ class SpotifyParser(BaseWebParser):
         lines = full_text.split('\n')
         non_empty = [l.strip() for l in lines if l.strip()]
         title = SpotifyParser.extract_title_from_raw(non_empty)
-        
-        # ====================================================
-        # INIZIO DEI MODULI OFFLINE (ARCHITETTURA A SMISTAMENTO)
-        # ====================================================
-        
-        # --- 1. MODULO PLAYLIST PUBBLICA ---
+
         if header == "Playlist pubblica":
             ext_lines = [header, "", title, ""]
             start_idx = 0
@@ -265,7 +311,6 @@ class SpotifyParser(BaseWebParser):
                 
                 line = SpotifyParser.fix_concatenations(line)
                 if line and line != prev_line:
-                    # Iniezione del numero di traccia prima del titolo!
                     if prev_line and bool(re.match(r'^\d{1,2}:\d{2}$', prev_line)):
                          ext_lines.append("")
                          ext_lines.append(str(track_counter))
@@ -279,7 +324,6 @@ class SpotifyParser(BaseWebParser):
             
             return "\n".join(ext_lines).strip()
             
-        # --- 2. MODULO EPISODI PODCAST ---
         if header == "Episodi podcast":
             month_map = {
                 "Jan": "gen", "Feb": "feb", "Mar": "mar", "Apr": "apr",
@@ -301,14 +345,12 @@ class SpotifyParser(BaseWebParser):
                 
                 if low in ["e", "esplicito", "explicit", "riproduci", "salva", "see all episodes", "show all", "podcast episode", "episodi podcast", "all episodes"]: continue
                 
-                # Traduzioni UI
                 if low == "more episodes like this" or low == "more podcasts like this": line = "Altri episodi simili"
                 elif low == "episode description": line = "Descrizione dell'episodio"
                 elif low == "about": line = "Informazioni"
                     
                 line = SpotifyParser.fix_concatenations(line)
                 
-                # Conversione Date e unione tramite pallini
                 date_match = re.match(r'^([A-Z][a-z]{2})\s+(\d{1,2})(,\s*\d{4})?$', line)
                 if date_match:
                     m_eng = date_match.group(1)
@@ -350,7 +392,6 @@ class SpotifyParser(BaseWebParser):
             if pending_date: ext_lines.append(pending_date)
             return "\n".join(ext_lines).strip()
 
-        # --- 3. MODULO BRANO ---
         if header == "Brano":
             ext_lines = [header, "", title, ""]
             start_idx = 0
@@ -363,13 +404,10 @@ class SpotifyParser(BaseWebParser):
             for line in non_empty[start_idx:]:
                 low = line.lower()
                 
-                # Muro di Gomma per limitare spazzatura finale
                 if any(end in low for end in ["©", "℗", "scegli una lingua", "choose a language", "distributed by"]): break
                 
-                # Salta le opzioni UI MA NON SALTA LYRICS!
                 if low in ["e", "esplicito", "explicit", "anteprima", "preview", "riproduci", "salva", "sign in to see lyrics and listen to the full track", "show all"]: continue
                 
-                # Traduzioni Sezioni
                 if low == "artist": line = "Artista"
                 elif low == "recommended": line = "Consigliati"
                 elif low == "based on this song": line = "In base a questo brano"
@@ -386,11 +424,9 @@ class SpotifyParser(BaseWebParser):
                 
                 line = SpotifyParser.fix_concatenations(line)
                 
-                # Formattazione Grandi Numeri (142,248,675 -> 142.248.675)
                 if re.match(r'^\d{1,3}(,\d{3})+$', line):
                     line = line.replace(",", ".")
                 
-                # Formattazione Metadati Centrali con "•" (Es. Olly • Balorda nostalgia • 2025 • 3:17)
                 if line == "•" and ext_lines:
                     ext_lines[-1] = ext_lines[-1] + " •"
                     continue
@@ -398,7 +434,6 @@ class SpotifyParser(BaseWebParser):
                     ext_lines[-1] = ext_lines[-1] + " " + line
                     continue
                 
-                # Traduzione date lunghe finali
                 month_map_full = {
                     "january": "gennaio", "february": "febbraio", "march": "marzo", "april": "aprile",
                     "may": "maggio", "june": "giugno", "july": "luglio", "august": "agosto",
@@ -418,7 +453,6 @@ class SpotifyParser(BaseWebParser):
                     
             return "\n".join(ext_lines).strip()
 
-        # --- 4. MODULO ALBUM (IL TUO NATIVO DA 0.611) ---
         artists = SpotifyParser.extract_main_artist(non_empty, title)
         
         extracted_lines = [header, "", title]

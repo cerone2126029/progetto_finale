@@ -18,8 +18,6 @@ class ScaruffiParser(BaseWebParser):
     regolari custom per estrarre solo il testo enciclopedico/informativo.
     """
 
-    # Blacklist di espressioni regolari per rimuovere il boilerplate ricorrente:
-    # copyright, crediti, inviti a navigare, titoli di menu fissi e note dell'autore.
     _SPAZZATURA = [
         r'TM[\s\S]*?Copyright[\s\S]*?All\s+rights\s+reserved\.?',
         r'Copyright[\s\S]*?(?:Piero|Paolo|P\.)?\s*Scaruffi[\s\S]*?All\s+rights\s+reserved\.?',
@@ -50,9 +48,6 @@ class ScaruffiParser(BaseWebParser):
     def __init__(self):
         super().__init__()
 
-        # Configurazione specifica di Crawl4AI per Scaruffi.
-        # Viene aggiunto un piccolo delay per assicurarsi che la pagina carichi interamente,
-        # e si disabilita la rimozione degli overlay che potrebbe corrompere l'HTML legacy.
         self.run_config = CrawlerRunConfig(
             delay_before_return_html=2,
             remove_overlay_elements=False,
@@ -67,15 +62,9 @@ class ScaruffiParser(BaseWebParser):
         Ricava il titolo decodificando e formattando l'ultimo segmento dell'URL.
         """
         if url:
-            # Prende l'ultimo pezzo dell'URL (es. "beatles.html" o "cpt12.html")
             raw_title = url.split("/")[-1]
-            
-            # Toglie l'estensione e sostituisce eventuali trattini/underscore con spazi
             clean_title = raw_title.replace(".html", "").replace(".htm", "").replace("_", " ").replace("-", " ")
-            
-            # Formatta il titolo con le iniziali maiuscole (es. "beatles" -> "Beatles")
             return clean_title.title()
-            
         return None
 
     def parse_offline_html(self, html_content: str) -> str:
@@ -106,47 +95,34 @@ class ScaruffiParser(BaseWebParser):
         if not body:
             return "Nessun tag <body> trovato."
 
-        # 1. ELIMINAZIONE DEL RUMORE INVISIBILE E STRUTTURALE
-        # Rimuove script, stili, moduli e i rari tag di navigazione semantica
         for tag in body.find_all(['script', 'style', 'nav', 'iframe', 'form']):
             tag.decompose()
             
-        # Rimuove i titoli enormi e i tag font obsoleti (spesso usati per intestazioni/banner su questo sito)
         for tag in body.find_all(['h1', 'h2']):
             tag.decompose()
         for tag in body.find_all('font', size=lambda value: value in ['5', '6', '7']):
             tag.decompose()
 
-        # 2. EURISTICA DELLA DENSITÀ DEI LINK
-        # Poiché il sito impagina i menu dentro tabelle o liste, eliminiamo
-        # i contenitori in cui il testo cliccabile supera il 40% del testo totale.
         for container in body.find_all(['table', 'ul']):
             links = container.find_all('a')
             if not links:
                 continue
             
-            # Calcola quanti caratteri appartengono a dei link rispetto al totale del blocco
             text_in_links = sum(len(a.get_text(strip=True)) for a in links)
             total_text = len(container.get_text(strip=True))
             
             if total_text > 0 and (text_in_links / total_text) > 0.40:
                 container.decompose()
 
-        # 3. ESTRAZIONE DEL TESTO GREZZO
         raw_text = body.get_text(separator="\n", strip=True)
 
-        # 4. APPLICAZIONE DELLA BLACKLIST (Boilerplate removal)
-        # Passa tutte le regex di _SPAZZATURA per cancellare diciture ripetitive
         for pattern in self._SPAZZATURA:
             raw_text = re.sub(pattern, '', raw_text, flags=re.IGNORECASE)
 
-        # 5. PULIZIA FINALE E FORMATTAZIONE
-        # Rimuove le righe vuote e i caratteri isolati come le pipe "|"
         clean_lines = []
         for line in raw_text.split('\n'):
             line = line.strip()
             if line and line != "|":
                 clean_lines.append(line)
 
-        # Unisce le righe con doppio a capo per simulare paragrafi puliti
         return "\n\n".join(clean_lines)

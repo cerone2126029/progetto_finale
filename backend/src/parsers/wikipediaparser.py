@@ -14,39 +14,32 @@ class WikipediaParser(BaseWebParser):
     """
     Estende BaseWebParser per adattarlo alla struttura DOM e testuale di Wikipedia.
     """
-    
-    # Pattern per individuare l'inizio delle sezioni di appendice.
-    # Tutto il testo che si trova dopo queste intestazioni verrà scartato per la valutazione.
     _STOP_PATTERN = re.compile(
         r'^#+\s*(References?|Notes?|See also|External links?|Further reading|Bibliography|Citations?).*$',
         flags=re.IGNORECASE | re.MULTILINE
     )
-
-    # Regole di pulizia Regex applicate iterativamente al Markdown generato.
     _CLEANING_RULES = [
-        (re.compile(r'\[[^\]]*\]\s*\([^\)]*#cite_note[^\)]*\)', flags=re.IGNORECASE), ''), # Rimuove i link alle note a piè di pagina
-        (re.compile(r'\[\s*\]\([^\)]+\)'), ''), # Rimuove i link testuali vuoti
-        (re.compile(r'_?\[citation needed\]_?', flags=re.IGNORECASE), ''), # Rimuove i tag "[citation needed]"
-        (re.compile(r'\[Italian language\]', flags=re.IGNORECASE), ''), # Rimuove indicazioni di lingua specifiche
-        (re.compile(r'(?<!\!)\[\d+\]'), ''), # Rimuove i rimandi numerici (es. [1], [2]) senza toccare la sintassi delle immagini
-        (re.compile(r'(?<!\!)\[\s*[a-z]\s*\]', flags=re.IGNORECASE), ''), # Rimuove i rimandi alfabetici (es. [a], [b])
-        (re.compile(r'\(\s*\)'), ''), # Elimina le parentesi rimaste vuote a causa delle pulizie precedenti
-        (re.compile(r'^!.*$', flags=re.MULTILINE), ''), # Rimuove residui di immagini in formato Markdown
-        (re.compile(r'<sup[^>]*>.*?</sup>', flags=re.IGNORECASE | re.DOTALL), ''), # Rimuove il contenuto in apice (tipicamente riferimenti)
-        (re.compile(r'\{\{\s*.*?\}\}', flags=re.DOTALL), ''), # Rimuove eventuali residui sintattici di template MediaWiki
-        (re.compile(r'^\s*This article (is|needs|may).*?\.$', flags=re.MULTILINE | re.IGNORECASE), ''), # Rimuove avvisi redazionali a inizio pagina
-        (re.compile(r'^\s*This page (is|was).*?Wikipedia\.', flags=re.MULTILINE | re.IGNORECASE), ''), # Rimuove i metadati redazionali
-        (re.compile(r'Coordinates?:\s*.*$', flags=re.MULTILINE | re.IGNORECASE), ''), # Rimuove i blocchi di coordinate geografiche
-        (re.compile(r'(?<!\!)\[([^\]]+)\]\([^\)]+\)'), r'\1'), # Converte i restanti link utili in testo semplice (rimuovendo l'URL)
-        (re.compile(r'\n{3,}'), '\n\n'), # Normalizza l'impaginazione comprimendo i ritorni a capo eccessivi
-        (re.compile(r'^\s*[-*+]\s*$', flags=re.MULTILINE), '') # Rimuove elementi di liste rimasti vuoti
+        (re.compile(r'\[[^\]]*\]\s*\([^\)]*#cite_note[^\)]*\)', flags=re.IGNORECASE), ''), 
+        (re.compile(r'\[\s*\]\([^\)]+\)'), ''), 
+        (re.compile(r'_?\[citation needed\]_?', flags=re.IGNORECASE), ''), 
+        (re.compile(r'\[Italian language\]', flags=re.IGNORECASE), ''), 
+        (re.compile(r'(?<!\!)\[\d+\]'), ''), 
+        (re.compile(r'(?<!\!)\[\s*[a-z]\s*\]', flags=re.IGNORECASE), ''), 
+        (re.compile(r'\(\s*\)'), ''), 
+        (re.compile(r'^!.*$', flags=re.MULTILINE), ''), 
+        (re.compile(r'<sup[^>]*>.*?</sup>', flags=re.IGNORECASE | re.DOTALL), ''), 
+        (re.compile(r'\{\{\s*.*?\}\}', flags=re.DOTALL), ''), 
+        (re.compile(r'^\s*This article (is|needs|may).*?\.$', flags=re.MULTILINE | re.IGNORECASE), ''), 
+        (re.compile(r'^\s*This page (is|was).*?Wikipedia\.', flags=re.MULTILINE | re.IGNORECASE), ''), 
+        (re.compile(r'Coordinates?:\s*.*$', flags=re.MULTILINE | re.IGNORECASE), ''), 
+        (re.compile(r'(?<!\!)\[([^\]]+)\]\([^\)]+\)'), r'\1'),
+        (re.compile(r'\n{3,}'), '\n\n'), 
+        (re.compile(r'^\s*[-*+]\s*$', flags=re.MULTILINE), '') 
     ]
 
     def __init__(self):
         super().__init__()
-       
-        # Selettori CSS (classi e ID) da escludere a monte durante il crawling.
-        # Rimuove infobox, menu laterali, indici (TOC), miniature di immagini e note.
+
         excluded_selectors = [
             ".infobox", ".infobox_v2", ".mw-editsection", ".navbox", "#toc", 
             ".ambox", ".hatnote", ".thumb", ".thumbinner", ".gallery", 
@@ -54,13 +47,12 @@ class WikipediaParser(BaseWebParser):
             ".mw-halign-left", ".mw-halign-center", ".reference"
         ]
 
-        # Configurazione mirata di Crawl4AI per Wikipedia
         self.run_config = CrawlerRunConfig(
             magic=True,
             cache_mode=CacheMode.BYPASS,
             exclude_external_links=True,
-            css_selector="#mw-content-text", # Estrae solo il blocco principale contenente l'articolo
-            excluded_tags=["nav", "footer", "header", "aside", "figure"], # Ignora tag strutturali irrilevanti
+            css_selector="#mw-content-text", 
+            excluded_tags=["nav", "footer", "header", "aside", "figure"], 
             excluded_selector=", ".join(excluded_selectors)
         )
 
@@ -90,12 +82,10 @@ class WikipediaParser(BaseWebParser):
         if not text:
             return ""
 
-        # Tronca il testo non appena trova l'intestazione di una sezione "Stop"
         match = self._STOP_PATTERN.search(text)
         if match:
             text = text[:match.start()]
 
-        # Applica in sequenza tutte le regex definite in _CLEANING_RULES
         for pattern, replacement in self._CLEANING_RULES:
             text = pattern.sub(replacement, text)
        
@@ -110,18 +100,14 @@ class WikipediaParser(BaseWebParser):
         from bs4 import BeautifulSoup
         soup = BeautifulSoup(html_content, "html.parser")
         
-        # 1. Rimuove i tag strutturali irrilevanti
         for tag in soup.find_all(['nav', 'footer', 'header', 'aside', 'figure']): 
             tag.decompose()
             
-        # 2. Replica l'esclusione delle classi e degli ID CSS che Crawl4AI ignorerebbe online
         for junk in soup.select(".infobox, .infobox_v2, .mw-editsection, .navbox, #toc, .ambox, .hatnote, .thumb, .thumbinner, .gallery, .shortdescription, .tright, .tleft, .mw-halign-right, .mw-halign-left, .mw-halign-center, .reference"): 
             junk.decompose()
             
-        # 3. Preserva semanticamente le intestazioni principali convertendole nei tag Markdown corrispondenti
         for h2 in soup.find_all('h2'): h2.insert(0, "## ")
         for h3 in soup.find_all('h3'): h3.insert(0, "### ")
         
-        # Punta direttamente al contenitore del contenuto testuale (se presente), estrae il testo e lo pulisce
         content = soup.select_one("#mw-content-text") or soup
         return self.clean_markdown(content.get_text(separator="\n"))

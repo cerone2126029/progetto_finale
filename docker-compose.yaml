@@ -1,19 +1,14 @@
 # Orchestrazione dei 4 container del progetto.
-# Avviabile con: docker compose up --build
 # Porte esposte (obbligatorie da specifica):
 #   backend  -> 8003
 #   frontend -> 8004
 #   database -> 3306
 #   ollama   -> 11434
 
-
 version: '3.8'
 
-
 services:
-  # ---------------------------------------------------------------------------
   # BACKEND (FastAPI + parsers + LLM client + DB connector)
-  # ---------------------------------------------------------------------------
   backend:
     build:
       context: .
@@ -40,10 +35,7 @@ services:
         limits:
           memory: 4G
 
-
-  # ---------------------------------------------------------------------------
   # FRONTEND (Jinja2 + HTML/CSS)
-  # ---------------------------------------------------------------------------
   frontend:
     build:
       context: .
@@ -56,12 +48,7 @@ services:
     depends_on:
       - backend
 
-
-  # ---------------------------------------------------------------------------
   # DATABASE (MariaDB)
-  # Healthcheck obbligatorio: il backend aspetta che il DB sia "healthy" prima
-  # di partire, così init_db.py trova il server già pronto.
-  # ---------------------------------------------------------------------------
   database:
     image: mariadb:11
     container_name: esonero-database
@@ -80,13 +67,7 @@ services:
       timeout: 5s
       retries: 20
 
-
-  # ---------------------------------------------------------------------------
   # OLLAMA (LLM server)
-  # Il modello viene scaricato al primo avvio tramite un entrypoint custom:
-  #   ollama serve & ollama pull <modello> && wait
-  # In questo modo non serve un'azione manuale dopo "docker compose up --build".
-  # ---------------------------------------------------------------------------
   ollama:
     image: ollama/ollama:latest
     container_name: esonero-ollama
