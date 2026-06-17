@@ -24,12 +24,29 @@ class SpotifyParser(BaseWebParser):
             excluded_tags=["nav", "footer", "header", "aside", "script", "style", "noscript", "form"],
         )
 
+    def extract_fallback_title(self, url: str) -> Optional[str]:
+        """
+        Fornisce un titolo di emergenza se la risorsa viene caricata dal DB 
+        e non possiede un titolo salvato. Evita che il frontend mostri "(nessuno)".
+        Analizza l'URL per fornire un titolo sensato (es. "Spotify Episode").
+        """
+        if not url:
+            return "Spotify Content"
+        try:
+            parts = url.strip('/').split('/')
+            if len(parts) > 1:
+                kind = parts[-2].lower()
+                if kind in ["episode", "track", "album", "playlist", "show"]:
+                    return f"Spotify {kind.capitalize()}"
+        except Exception:
+            pass
+        return "Spotify Content"
+
     def _extract_html_title(self, html: str) -> str:
         """
         Override del metodo della classe base per garantire l'estrazione
-        del titolo corretto sia in modalità Live che in modalità Local dal DB.
+        del titolo corretto in modalità Live dal DOM.
         """
-
         if not html: 
             return "Spotify Content"
             
@@ -63,7 +80,6 @@ class SpotifyParser(BaseWebParser):
         Corregge gli errori tipografici di spaziatura generati dal join di elementi DOM.
         Separa CamelCase, Lettera-Numero e aggiunge spazi mancanti dopo parentesi chiuse.
         """
-
         text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
         text = re.sub(r'([a-zA-Z])(\d)', r'\1 \2', text)
         text = re.sub(r'(\d)([a-zA-Z])', r'\1 \2', text)
@@ -77,7 +93,6 @@ class SpotifyParser(BaseWebParser):
         Ripara le concatenazioni errate che si verificano prima di parentesi quadre
         (tipico nei tag estratti dalla cache) preservando eventuali link Markdown.
         """
-
         line = re.sub(r'([a-zA-Z])\[', r'\1 [', line)
         parts = re.split(r'(\[[^\]]+\]\([^)]+\))', line)
         for i in range(len(parts)):
@@ -97,7 +112,6 @@ class SpotifyParser(BaseWebParser):
         Rimuove la formattazione dei link Markdown `[testo](url)` lasciando solo il testo.
         Rimuove completamente eventuali link vuoti `[](url)`.
         """
-
         text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1 ', text)
         text = re.sub(r'\[\]\([^)]+\)', '', text)
         return text
@@ -108,7 +122,6 @@ class SpotifyParser(BaseWebParser):
         Analizza semanticamente il testo grezzo per inferire la tipologia 
         di contenuto musicale della pagina (Album, Brano, Playlist, Podcast).
         """
-
         t = text.lower()
         if "playlist pubblica" in t or "public playlist" in t: return "Playlist pubblica"
         if "brano" in t or "lyrics" in t or "song" in t: return "Brano"
@@ -121,7 +134,6 @@ class SpotifyParser(BaseWebParser):
         Estrazione euristica del titolo ricercando la prima riga utile (lunghezza > 3)
         nelle prime 15 righe del documento, saltando le parole chiave di cache e cookie.
         """
-
         for line in lines[:15]:
             if len(line) > 3 and not any(noise in line.lower() for noise in ["spotify", "web player", "google", "cache", "cookie"]):
                 return line.strip()
@@ -133,7 +145,6 @@ class SpotifyParser(BaseWebParser):
         Esegue una pulizia aggressiva finale del testo (soprattutto per fallback).
         Filtra parole chiave note di UI, contatori, durate e rimuove righe vuote duplicate.
         """
-
         if not text: return ""
         text = SpotifyParser.strip_links(text)
         lines = text.split('\n')
@@ -182,22 +193,7 @@ class SpotifyParser(BaseWebParser):
         Entry point principale del parser per i dati estratti dal crawler (Live).
         Prepara il dizionario con l'URL, il dominio, il titolo e l'output Markdown.
         """
-
         html = getattr(result, "html", "") or ""
-        soup = BeautifulSoup(html, "html.parser")
-        extracted_title = "Spotify Content"
-    
-        title_tag = soup.find("title")
-        if title_tag:
-           raw_title = title_tag.get_text()
-           cleaned_title = raw_title.split(" - ")[0].split(" | ")[0].strip()
-           if cleaned_title and cleaned_title.lower() not in ["spotify", "spotify – web player"]:
-               extracted_title = cleaned_title
-        else:
-           h1_tag = soup.find("h1")
-           if h1_tag:
-               extracted_title = h1_tag.get_text(strip=True)
-            
         return {
            "url": getattr(result, "url", ""),
            "domain": "open.spotify.com",
@@ -211,7 +207,6 @@ class SpotifyParser(BaseWebParser):
         Entry point secondario del parser per i dati provenienti dal Database (Local=True).
         Invia direttamente l'HTML archiviato all'orchestratore.
         """
-
         return self._orchestrate_extraction(html_content)
 
     @staticmethod
@@ -220,7 +215,6 @@ class SpotifyParser(BaseWebParser):
         Ricerca e identifica il nome dell'artista o del creatore principale,
         solitamente posizionato subito sotto la riga del titolo dell'album/brano.
         """
-
         for i, line in enumerate(lines):
             if line == title and i + 1 < len(lines):
                 candidate = lines[i+1].split('•')[0].strip()
@@ -234,7 +228,6 @@ class SpotifyParser(BaseWebParser):
         note (UI, banner, cache tag) e indirizza il flusso semantico verso
         il modulo specializzato corrispondente (Live DOM, Playlist, Podcast, Brano, Album).
         """
-
         if not html: return ""
         
         html = re.sub(r'<div[^>]*id="bN015htcoyT__google-cache-hdr"[^>]*>.*?</div>', '', html, flags=re.DOTALL|re.IGNORECASE)

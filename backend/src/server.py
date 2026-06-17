@@ -22,7 +22,6 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-
 from parsers.wikipediaparser import WikipediaParser
 from parsers.scaruffiparser import ScaruffiParser
 from parsers.travelstategov import TravelStateGov
@@ -143,7 +142,6 @@ async def post_parse(request: ParseRequest) -> Dict[str, Any]:
       * local=False (default): scarica la pagina live con Crawl4AI.
       * local=True: usa l'HTML salvato in web_resources e ri-esegue solo il parsing.
     """
-
     if not is_supported_domain(request.url):
         raise HTTPException(status_code=400, detail="Dominio non supportato.")
 
@@ -181,7 +179,6 @@ async def post_parse(request: ParseRequest) -> Dict[str, Any]:
 @app.get("/gold_standard")
 def get_gold_standard(url: str) -> Dict[str, Any]:
     """Restituisce l'entry del Gold Standard per l'URL dato."""
-
     entry = db.get_gold_standard(url)
     if not entry:
         raise HTTPException(status_code=404, detail="URL non presente nel Gold Standard.")
@@ -204,7 +201,6 @@ def get_gold_standard_urls(domain: str) -> Dict[str, Any]:
 @app.post("/evaluate")
 def evaluate(request: EvaluateRequest) -> Dict[str, Any]:
     """Metriche quantitative tra parsed_text e gold_text. token_level_eval è obbligatoria."""
-
     p_text = request.parsed_text if request.parsed_text else ""
     g_text = request.gold_text if request.gold_text else ""
     metrics = token_level_eval(p_text, g_text)
@@ -249,6 +245,11 @@ async def full_gs_eval(domain: str) -> Dict[str, Any]:
     count = 0
     judge_count = 0
 
+    # Limite configurabile per non mandare in Timeout la rotta massiva su CPU.
+    # Default = 3 (valuta con l'LLM solo i primi 3 URL del dominio). 
+    # Se impostato a 0 via env, li valuta tutti.
+    limit_env = int(os.getenv("JUDGE_FULL_LIMIT", "3"))
+
     for entry in entries:
         html_text = entry.get("html_text") or ""
         gold_text = entry.get("gold_text") or ""
@@ -256,7 +257,10 @@ async def full_gs_eval(domain: str) -> Dict[str, Any]:
             continue
 
         try:
+            # 1. Parsing Offline
             parsed_text = parser.parse_offline_html(html_text)
+            
+            # 2. Metriche Deterministiche (Token Level)
             metrics = token_level_eval(parsed_text, gold_text)
             sum_p += metrics.get("precision", 0.0)
             sum_r += metrics.get("recall", 0.0)
@@ -264,21 +268,20 @@ async def full_gs_eval(domain: str) -> Dict[str, Any]:
             count += 1
             db.save_evaluation(entry["url"], {"token_level_eval": metrics})
             
-            judge_result = {
-                "model_name": OLLAMA_MODEL, 
-                "judge_score": 3, 
-                "judge_feedback": "Mock rapido per il grader"
-            }
+            # 3. Valutazione Qualitativa LLM (Con Limite Anti-Timeout)
+            if limit_env == 0 or judge_count < limit_env:
+                # CHIAMATA REALE ASINCRONA
+                judge_result = await evaluate_with_judge(parsed_text, gold_text)
 
-            if "judge_score" in judge_result:
-                sum_judge += int(judge_result["judge_score"])
-                judge_count += 1
-                db.save_judge_evaluation(
-                    entry["url"],
-                    str(judge_result.get("model_name") or OLLAMA_MODEL),
-                    int(judge_result["judge_score"]),
-                    str(judge_result.get("judge_feedback") or ""),
-                )
+                if judge_result and "judge_score" in judge_result:
+                    sum_judge += int(judge_result["judge_score"])
+                    judge_count += 1
+                    db.save_judge_evaluation(
+                        entry["url"],
+                        str(judge_result.get("model_name") or OLLAMA_MODEL),
+                        int(judge_result["judge_score"]),
+                        str(judge_result.get("judge_feedback") or ""),
+                    )
         except Exception as e:
             print(f"Skipping entry {entry['url']} due to error: {e}")
             continue
@@ -338,9 +341,9 @@ def delete_gold_standard(request: UrlOnlyRequest) -> Dict[str, str]:
         success = db.delete_gold_standard(request.url)
         if success:
             return {"status": "ok"}
-        return {"status": "error"} 
+        return {"status": "error", "detail": "URL non trovato in gold_standard"} 
     except Exception as e:
-        return {"status": "error"}
+        return {"status": "error", "detail": str(e)}
 
 @app.get("/db_stats")
 def get_db_stats() -> Dict[str, Any]:

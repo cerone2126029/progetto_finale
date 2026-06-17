@@ -13,7 +13,7 @@ import httpx
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://ollama:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
-MAX_TEXT_CHARS = int(os.getenv("JUDGE_MAX_CHARS", "4000"))
+MAX_TEXT_CHARS = int(os.getenv("JUDGE_MAX_CHARS", "1000"))
 REQUEST_TIMEOUT = float(os.getenv("JUDGE_TIMEOUT", "120"))
 
 SYSTEM_PROMPT = (

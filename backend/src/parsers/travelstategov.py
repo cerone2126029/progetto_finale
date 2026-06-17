@@ -1,6 +1,6 @@
 import re
 from typing import List, Optional
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 from bs4 import BeautifulSoup
 from crawl4ai import CrawlerRunConfig, CacheMode
 from parsers.basewebparser import BaseWebParser
@@ -26,10 +26,39 @@ class TravelStateGov(BaseWebParser):
 
     def extract_fallback_title(self, url: str) -> Optional[str]:
         """
-        Restituisce un titolo statico di emergenza qualora l'estrazione dinamica
-        dal DOM dovesse fallire.
+        Estrae dinamicamente il titolo dell'avviso o della pagina informativa 
+        dall'URL fornito, evitando valori fissi (hardcoded) ed eliminando 
+        estensioni o caratteri di formattazione del percorso.
         """
-        return "Travel Advisory | Travel.State.gov"
+        if not url:
+            return "Travel Advisory | Travel.State.gov"
+        try:
+            # Analizza l'URL (es. /content/.../italy-travel-advisory.html)
+            path = urlparse(unquote(url)).path
+            if not path or path == '/':
+                return "Travel Advisory | Travel.State.gov"
+                
+            # Prende l'ultima parte dell'URL
+            slug = path.split('/')[-1]
+            if not slug and len(path.split('/')) > 1:
+                slug = path.split('/')[-2]
+                
+            # Rimuove .html e sostituisce i trattini con gli spazi
+            slug = re.sub(r'\.html?$', '', slug, flags=re.IGNORECASE)
+            clean_name = slug.replace('-', ' ').replace('_', ' ').strip()
+            
+            # Capitalizza le prime lettere (es. "italy travel advisory" -> "Italy Travel Advisory")
+            title_case = clean_name.title()
+            
+            if not title_case:
+                return "Travel Advisory | Travel.State.gov"
+                
+            if "Travel Advisory" in title_case:
+                return f"{title_case} | Travel.State.gov"
+            return f"{title_case} - Travel Information | Travel.State.gov"
+            
+        except Exception:
+            return "Travel Advisory | Travel.State.gov"
 
     def clean_markdown(self, text: str) -> str:
         """
@@ -38,7 +67,6 @@ class TravelStateGov(BaseWebParser):
         screen reader (es. "Skip to main content"), form di feedback e simboli 
         isolati tipici delle interfacce ad accordion (+, -, V, >, <).
         """
-
         if not text: return ""
         
         text = re.compile(r'^.*Last Updated:.*$', flags=re.IGNORECASE | re.MULTILINE).sub('', text)
@@ -71,7 +99,6 @@ class TravelStateGov(BaseWebParser):
         1. Piano A: Ricerca selettori di componenti specifici AEM (es. alert, requisiti, ambasciate).
         2. Piano B: Fallback sui macro-contenitori generici del sito se il Piano A non produce risultati.
         """
-
         if not html: return ""
         soup = BeautifulSoup(html, "html.parser")
 
@@ -120,7 +147,6 @@ class TravelStateGov(BaseWebParser):
         Entry point principale del parser per i dati estratti dinamicamente dal crawler (Live).
         Prepara e restituisce il dizionario strutturato con i metadati e il testo processato.
         """
-
         html = getattr(result, "html", "") or ""
         return {
             "url": getattr(result, "url", ""),
@@ -135,7 +161,6 @@ class TravelStateGov(BaseWebParser):
         Entry point secondario del parser per i dati provenienti dal Database (Modalità Local).
         Invia direttamente l'HTML archiviato all'orchestratore semantico bypassando la rete.
         """
-
         return self._extract_semantic_blocks(html_content)
 
     def extract_and_clean_text(self, result) -> str:
